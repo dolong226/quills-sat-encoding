@@ -1,222 +1,229 @@
-# src/main.py
-
+#!/usr/bin/env python3
 """
-Simple test entrypoint for the SAT-based quantum transpiler.
+main.py — QuilLS command-line entry point.
 
-Hiện tại main này dùng để test:
-    - QASM parser
-    - Circuit representation
-    - Dependency DAG
-    - Platform topology
-    - SAT variable generation
-    - Helper functions
+Usage examples
+--------------
+# Basic run with default solver (cadical195) and line topology
+python main.py circuit.qasm --topology line
 
+# Specify an IBM Tenerife topology and a different solver
+python main.py circuit.qasm --topology tenerife --solver kissat404
+
+# Grid topology with verbose output
+python main.py circuit.qasm --topology grid2x2 --verbose
+
+# List available solvers
+python main.py --list-solvers
 """
 
-from pprint import pprint
+from __future__ import annotations
 
-# ============================================================
-# Circuit
-# ============================================================
+import argparse
+import logging
+import sys
 
 from circuit.parser import parse_qasm
-from circuit.dag import build_dependency_dag
+from quills_platform.presets import ibmq_tenerife, grid_2x2, line_topology
+from quills_platform.topology import Topology
 
-# ============================================================
-# Platform
-# ============================================================
-
-# hoặc:
-# from src.platform.topology import Topology
-
-# ============================================================
-# SAT Encoding
-# ============================================================
-
-from encoding.variables import VarPool
-
-# helper functions (nếu có)
-# from src.encoding.helpers import ...
+from solver.factory import SolverFactory
+from solver.engine import QuilLSEngine
 
 
-# ============================================================
-# Utility Printers
-# ============================================================
+# ------------------------------------------------------------------
+# Logging setup
+# ------------------------------------------------------------------
 
-def print_circuit(circuit):
-    print("\n" + "=" * 60)
-    print("CIRCUIT")
-    print("=" * 60)
+def _setup_logging(verbose: bool) -> None:
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        format="%(asctime)s  %(levelname)-7s  %(message)s",
+        datefmt="%H:%M:%S",
+        level=level,
+    )
 
-    print(circuit)
 
-    for gate in circuit.gates:
-        print(
-            f"[g{gate.gate_id:02}] "
-            f"{gate.name:<4} "
-            f"qubits={gate.qubits}"
+# ------------------------------------------------------------------
+# Topology helpers
+# ------------------------------------------------------------------
+
+_TOPOLOGY_PRESETS: dict[str, str] = {
+    "line":     "Linear chain (n qubits, auto-sized to circuit)",
+    "tenerife": "IBM Q Tenerife (5 qubits)",
+    "grid2x2":  "2×2 grid (4 qubits)",
+}
+
+
+def _build_topology(name: str, n_qubits: int) -> Topology:
+    name = name.lower()
+    if name == "line":
+        return line_topology(n_qubits)
+    if name in ("tenerife", "ibmq_tenerife"):
+        return ibmq_tenerife()
+    if name in ("grid2x2", "grid"):
+        return grid_2x2()
+    raise ValueError(
+        f"Unknown topology '{name}'. "
+        f"Available: {', '.join(_TOPOLOGY_PRESETS)}"
+    )
+
+
+# ------------------------------------------------------------------
+# Result printer
+# ------------------------------------------------------------------
+
+def _print_result(result) -> None:
+    sep = "─" * 52
+    print(sep)
+    print(result)
+    print(sep)
+
+    if not result.sat:
+        return
+
+    if result.initial_mapping:
+        print("\nInitial mapping (logical → physical):")
+        for q in sorted(result.initial_mapping):
+            print(f"  q{q} → p{result.initial_mapping[q]}")
+
+    if result.schedule:
+        print("\nGate schedule (timestep → gate ids):")
+        for t in sorted(result.schedule):
+            gates = result.schedule[t]
+            print(f"  t={t:3d}  gates: {gates}")
+
+    print()
+
+
+# ------------------------------------------------------------------
+# CLI
+# ------------------------------------------------------------------
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="quills",
+        description="QuilLS — Depth-Optimal Quantum Layout Synthesis via SAT",
+    )
+
+    p.add_argument(
+        "qasm_file",
+        nargs="?",
+        help="Path to the input .qasm circuit file",
+    )
+    p.add_argument(
+        "--topology", "-t",
+        default="line",
+        metavar="NAME",
+        help=(
+            "Hardware topology preset: "
+            + ", ".join(_TOPOLOGY_PRESETS)
+            + "  (default: line)"
+        ),
+    )
+    p.add_argument(
+        "--solver", "-s",
+        default=SolverFactory.default_tag(),
+        metavar="TAG",
+        help=f"SAT solver to use (default: {SolverFactory.default_tag()})",
+    )
+    p.add_argument(
+        "--max-depth", "-d",
+        type=int,
+        default=200,
+        metavar="N",
+        help="Hard upper bound on makespan search (default: 200)",
+    )
+    p.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose logging",
+    )
+    p.add_argument(
+        "--list-solvers",
+        action="store_true",
+        help="Print all available SAT solvers and exit",
+    )
+    p.add_argument(
+        "--list-topologies",
+        action="store_true",
+        help="Print all topology presets and exit",
+    )
+
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    _setup_logging(args.verbose)
+    log = logging.getLogger(__name__)
+
+    # ── Info commands ─────────────────────────────────────────────────
+    if args.list_solvers:
+        SolverFactory.list_available()
+        return 0
+
+    if args.list_topologies:
+        print(f"{'Name':<12} Description")
+        print("-" * 50)
+        for name, desc in _TOPOLOGY_PRESETS.items():
+            print(f"  {name:<10} {desc}")
+        return 0
+
+    # ── Validate inputs ───────────────────────────────────────────────
+    if not args.qasm_file:
+        parser.print_help()
+        return 1
+
+    # ── Parse circuit ─────────────────────────────────────────────────
+    log.info("Parsing circuit: %s", args.qasm_file)
+    try:
+        circuit = parse_qasm(args.qasm_file)
+    except FileNotFoundError:
+        log.error("File not found: %s", args.qasm_file)
+        return 1
+
+    log.info("  %s  (%d gates)", circuit, len(circuit.gates))
+
+    # ── Build topology ────────────────────────────────────────────────
+    log.info("Building topology: %s", args.topology)
+    try:
+        topology = _build_topology(args.topology, circuit.n_qubits)
+    except ValueError as e:
+        log.error("%s", e)
+        return 1
+
+    if topology.n_qubits < circuit.n_qubits:
+        log.error(
+            "Topology has %d qubits but circuit needs %d",
+            topology.n_qubits, circuit.n_qubits,
         )
+        return 1
 
+    # ── Validate solver ───────────────────────────────────────────────
+    try:
+        SolverFactory.create(args.solver).close()   # quick smoke-test
+    except ValueError as e:
+        log.error("%s", e)
+        return 1
 
-def print_dag(dag):
-    print("\n" + "=" * 60)
-    print("DEPENDENCY DAG")
-    print("=" * 60)
+    # ── Run engine ────────────────────────────────────────────────────
+    engine = QuilLSEngine(
+        circuit=circuit,
+        topology=topology,
+        solver_tag=args.solver,
+        max_depth=args.max_depth,
+        verbose=args.verbose,
+    )
 
-    for g in dag.gate_ids:
-        succ = dag.successors(g)
-        pred = dag.predecessors(g)
+    log.info("Running QuilLS with solver=%s ...", args.solver)
+    result = engine.run()
 
-        print(
-            f"g{g:02} | "
-            f"pred={pred} | "
-            f"succ={succ}"
-        )
+    _print_result(result)
+    return 0 if result.sat else 2
 
-
-def print_transitive_dependencies(dag):
-    print("\n" + "=" * 60)
-    print("TRANSITIVE DEPENDENCIES")
-    print("=" * 60)
-
-    for g in dag.gate_ids:
-        print(
-            f"g{g:02} | "
-            f"full_pred={sorted(dag.full_predecessors(g))} | "
-            f"full_succ={sorted(dag.full_successors(g))}"
-        )
-
-
-def print_platform(platform):
-    print("\n" + "=" * 60)
-    print("PLATFORM")
-    print("=" * 60)
-
-    print(platform)
-
-    # Tùy implementation topology của bạn
-    if hasattr(platform, "edges"):
-        print("Edges:")
-        for e in platform.edges:
-            print(" ", e)
-
-
-def print_variables(V):
-    print("\n" + "=" * 60)
-    print("SAT VARIABLES")
-    print("=" * 60)
-
-    # tạo thử vài biến
-    vars_to_test = [
-        V.mp(0, 1, 0),
-        V.mp(1, 2, 0),
-        V.sw(1, 2, 3),
-        V.c(5, 2),
-        V.a(5, 3),
-        V.asm(10),
-    ]
-
-    for lit in vars_to_test:
-        print(
-            f"{lit:>4} -> {V.name(lit)}"
-        )
-
-
-# ============================================================
-# Main
-# ============================================================
-
-def main():
-
-    # ========================================================
-    # Parse circuit
-    # ========================================================
-
-    qasm_path = "benchmarks/collection/4gt13_92.qasm"
-
-    print(f"\nLoading QASM: {qasm_path}")
-
-    circuit = parse_qasm(qasm_path)
-
-    print_circuit(circuit)
-
-    # ========================================================
-    # Build DAG
-    # ========================================================
-
-    dag = build_dependency_dag(circuit)
-
-    print_dag(dag)
-
-    print_transitive_dependencies(dag)
-
-    # ========================================================
-    # Load platform
-    # ========================================================
-
-    # Tùy implementation presets.py của bạn
-    #
-    # Ví dụ:
-    #     get_platform("tokyo")
-    #     get_platform("grid_5")
-    #
-
-    # ========================================================
-    # SAT Variable Pool
-    # ========================================================
-
-    V = VarPool()
-
-    print_variables(V)
-
-    # ========================================================
-    # Example: dependency checks
-    # ========================================================
-
-    print("\n" + "=" * 60)
-    print("DEPENDENCY CHECKS")
-    print("=" * 60)
-
-    for gate in circuit.gates:
-
-        g = gate.gate_id
-
-        preds = dag.predecessors(g)
-
-        if preds:
-            print(
-                f"Gate g{g} depends on {preds}"
-            )
-        else:
-            print(
-                f"Gate g{g} has no dependencies"
-            )
-
-    # ========================================================
-    # Example: CX gates
-    # ========================================================
-
-    print("\n" + "=" * 60)
-    print("CX GATES")
-    print("=" * 60)
-
-    for gate in circuit.gates:
-
-        if gate.name == "cx":
-
-            q1, q2 = gate.qubits
-
-            print(
-                f"g{gate.gate_id}: "
-                f"CX({q1}, {q2})"
-            )
-
-    print("\nDone.\n")
-
-
-# ============================================================
-# Entry Point
-# ============================================================
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
