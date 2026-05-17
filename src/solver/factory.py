@@ -39,6 +39,7 @@ class SolverFactory:
         for tag, (_, desc) in _REGISTRY.items():
             marker = " (default)" if tag == _DEFAULT else ""
             print(f"  {tag:<14} {desc}{marker}")
+            
     @staticmethod
     def default_tag() -> str:
         return _DEFAULT

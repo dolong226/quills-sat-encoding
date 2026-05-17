@@ -69,6 +69,7 @@ def parse_qasm(path: str) -> Circuit:
 
                 g = Gate(gate_id=gate_id, name="cx", gate_type=GateType.CX, qubits=(qubit_indices[0], qubit_indices[1]))
                 gates.append(g)
+                gate_id += 1
 
             # UNARY gate
             elif op in _UNARY_GATES:
@@ -77,8 +78,9 @@ def parse_qasm(path: str) -> Circuit:
 
                 g = Gate(gate_id=gate_id, name=op, gate_type=GateType.UNARY, qubits = (qubit_indices[0],))
                 gates.append(g)
+                gate_id += 1
             
-            gate_id += 1
+            
 
     
     return Circuit(n_qubits=n_qubits, gates=gates)

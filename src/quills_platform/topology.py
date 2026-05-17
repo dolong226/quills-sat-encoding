@@ -68,7 +68,7 @@ class Topology:
     
     def __str__(self) -> str:
         return (
-            f"Topology(num_qubits={self.num_qubits}, "
+            f"Topology(n_qubits={self.n_qubits}, "
             f"edges={self.edges})"
         )
 

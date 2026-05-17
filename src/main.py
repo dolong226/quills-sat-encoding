@@ -1,17 +1,9 @@
-#!/usr/bin/env python3
 """
-main.py — QuilLS command-line entry point.
+python main.py circuit.qasm --topology ibmq_guadalupe
 
-Usage examples
---------------
-# Basic run with default solver (cadical195) and line topology
-python main.py circuit.qasm --topology line
+python main.py circuit.qasm --topology ibmq_guadalupe --solver kissat404
 
-# Specify an IBM Tenerife topology and a different solver
-python main.py circuit.qasm --topology tenerife --solver kissat404
-
-# Grid topology with verbose output
-python main.py circuit.qasm --topology grid2x2 --verbose
+python main.py circuit.qasm --topology ibmq_guadalupe --verbose
 
 # List available solvers
 python main.py --list-solvers
@@ -24,16 +16,14 @@ import logging
 import sys
 
 from circuit.parser import parse_qasm
-from quills_platform.presets import ibmq_tenerife, grid_2x2, line_topology
+from quills_platform.presets import ibmq_guadalupe
 from quills_platform.topology import Topology
 
 from solver.factory import SolverFactory
 from solver.engine import QuilLSEngine
 
 
-# ------------------------------------------------------------------
 # Logging setup
-# ------------------------------------------------------------------
 
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
@@ -43,35 +33,21 @@ def _setup_logging(verbose: bool) -> None:
         level=level,
     )
 
-
-# ------------------------------------------------------------------
 # Topology helpers
-# ------------------------------------------------------------------
 
 _TOPOLOGY_PRESETS: dict[str, str] = {
-    "line":     "Linear chain (n qubits, auto-sized to circuit)",
-    "tenerife": "IBM Q Tenerife (5 qubits)",
-    "grid2x2":  "2×2 grid (4 qubits)",
+    "ibmq_guadalupe": "IBM"
 }
 
 
 def _build_topology(name: str, n_qubits: int) -> Topology:
     name = name.lower()
-    if name == "line":
-        return line_topology(n_qubits)
-    if name in ("tenerife", "ibmq_tenerife"):
-        return ibmq_tenerife()
-    if name in ("grid2x2", "grid"):
-        return grid_2x2()
-    raise ValueError(
-        f"Unknown topology '{name}'. "
-        f"Available: {', '.join(_TOPOLOGY_PRESETS)}"
-    )
+    if name in ("ibmq_guadalupe"):
+        return ibmq_guadalupe()
+    raise ValueError(f"Unknown topology '{name}'. ")
 
 
-# ------------------------------------------------------------------
 # Result printer
-# ------------------------------------------------------------------
 
 def _print_result(result) -> None:
     sep = "─" * 52
@@ -83,12 +59,12 @@ def _print_result(result) -> None:
         return
 
     if result.initial_mapping:
-        print("\nInitial mapping (logical → physical):")
+        print("\nInitial mapping (logical -> physical):")
         for q in sorted(result.initial_mapping):
-            print(f"  q{q} → p{result.initial_mapping[q]}")
+            print(f"  q{q} -:> p{result.initial_mapping[q]}")
 
     if result.schedule:
-        print("\nGate schedule (timestep → gate ids):")
+        print("\nGate schedule (timestep -> gate ids):")
         for t in sorted(result.schedule):
             gates = result.schedule[t]
             print(f"  t={t:3d}  gates: {gates}")
@@ -96,9 +72,7 @@ def _print_result(result) -> None:
     print()
 
 
-# ------------------------------------------------------------------
 # CLI
-# ------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -113,12 +87,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--topology", "-t",
-        default="line",
+        default="ibmq_guadalupe",
         metavar="NAME",
         help=(
             "Hardware topology preset: "
             + ", ".join(_TOPOLOGY_PRESETS)
-            + "  (default: line)"
+            + "  (default: ibmq_guadalupe)"
         ),
     )
     p.add_argument(
@@ -160,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     _setup_logging(args.verbose)
     log = logging.getLogger(__name__)
 
-    # ── Info commands ─────────────────────────────────────────────────
+    # Info commands
     if args.list_solvers:
         SolverFactory.list_available()
         return 0
@@ -172,12 +146,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {name:<10} {desc}")
         return 0
 
-    # ── Validate inputs ───────────────────────────────────────────────
+    # Validate inputs 
     if not args.qasm_file:
         parser.print_help()
         return 1
 
-    # ── Parse circuit ─────────────────────────────────────────────────
+    # Parse circuit
     log.info("Parsing circuit: %s", args.qasm_file)
     try:
         circuit = parse_qasm(args.qasm_file)
@@ -187,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
 
     log.info("  %s  (%d gates)", circuit, len(circuit.gates))
 
-    # ── Build topology ────────────────────────────────────────────────
+    # Build topology
     log.info("Building topology: %s", args.topology)
     try:
         topology = _build_topology(args.topology, circuit.n_qubits)
@@ -202,14 +176,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    # ── Validate solver ───────────────────────────────────────────────
+    # Validate solver
     try:
         SolverFactory.create(args.solver).close()   # quick smoke-test
     except ValueError as e:
         log.error("%s", e)
         return 1
 
-    # ── Run engine ────────────────────────────────────────────────────
+    # Run engine
     engine = QuilLSEngine(
         circuit=circuit,
         topology=topology,

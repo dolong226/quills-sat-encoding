@@ -6,27 +6,15 @@ def line_topology(n: int) -> Topology:
 
     return Topology(n_qubits=n, edges=edges)
 
-def grid_2x2() -> Topology:
-
+def ibmq_guadalupe() -> Topology:
     return Topology(
-        num_qubits=4,
+        n_qubits=16,
         edges=[
-            (0, 1),
-            (0, 2),
-            (1, 3),
-            (2, 3)
-        ]
-    )
-
-
-def ibmq_tenerife() -> Topology:
-
-    return Topology(
-        num_qubits=5,
-        edges=[
-            (0, 1),
-            (1, 2),
-            (1, 3),
-            (3, 4)
+            (0, 1), (1, 2), (1, 4),
+            (2, 3), (3, 5), (4, 7),
+            (5, 8), (6, 7), (7, 10),
+            (8, 9), (8, 11), (10, 12),
+            (11, 14), (12, 13), (12, 15),
+            (13, 14)
         ]
     )
