@@ -32,17 +32,17 @@ class ConnectivityConstraints(ConstraintGroup):
                         mp_q_p = self.pool.mp(q, p, t)
                         mp_q1_p1 = self.pool.mp(q1, p1, t)
 
-                        connected = tuple(sorted((p, p1)) in edges_set)
+                        connected = tuple(sorted((p, p1))) in edges_set
 
                         if connected:
-                            and_implies(self, [mp_q_p, mp_q1_p1], e_lit)
+                            and_implies(self.cnf, [mp_q_p, mp_q1_p1], e_lit)
                         else:
-                            and_implies(self, [mp_q_p, mp_q1_p1], e_lit)
+                            and_implies(self.cnf, [mp_q_p, mp_q1_p1], -e_lit)
 
     # (5)
     def _constraint_5(self, t: int) -> None:
         for gate in self.circuit.gates:
             if gate.is_cx:
-                c_lit = self.pool.c(gate, t)
+                c_lit = self.pool.c(gate.gate_id, t)
                 e_lit = self.pool.e(gate.control_qubit, gate.target_qubit, t)
                 implies(self.cnf, c_lit, e_lit) 

@@ -29,7 +29,7 @@ class SwapConstraints(ConstraintGroup):
                     lits.append(self.pool.sw(p, p2, t2))
 
             if len(lits) >= 2:
-                at_most_n(self.cnf, self.pool, 1, lits)
+                at_most_n(self.cnf, self.pool, 1, lits, tag=("c13", p, t))
 
     def _constraint_14(self, t: int) -> None:
         for p in range(self.topology.n_qubits):

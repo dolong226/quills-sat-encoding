@@ -1,7 +1,7 @@
 # AMO, EO, AMN, ...
 from itertools import combinations
 from pysat.formula import CNF
-from src.encoding.variables import VarPool
+from encoding.variables import VarPool
 
 # AMO
 def at_most_one(cnf: CNF, lits: list[int]) -> None:
@@ -14,7 +14,7 @@ def exactly_one(cnf: CNF, lits: list[int]) -> None:
     at_most_one(cnf, lits)
 
 # AMN
-def at_most_n(cnf: CNF, pool: VarPool, n: int, lits: list[int]) -> None:
+def at_most_n(cnf: CNF, pool: VarPool, n: int, lits: list[int], tag: object = None) -> None:
     k = len(lits)
 
     if n <= 0:
@@ -27,7 +27,7 @@ def at_most_n(cnf: CNF, pool: VarPool, n: int, lits: list[int]) -> None:
     
     # Lấy literal của biến phụ trợ r[i][j]
     def r(i: int, j: int) -> int:
-        return pool._var(("_amn_r", i, j))
+        return pool._var(("_amn_r", tag, i, j))
     
     for i, xi in enumerate(lits):
         for j in range(n):
@@ -64,7 +64,7 @@ def and_implies(cnf: CNF, antecedents: list[int], consequent: int) -> None:
     cnf.append([-a for a in antecedents] + [consequent])
 
 
-def iff(cnf: CNF, a: int, b: int) -> Noine:
+def iff(cnf: CNF, a: int, b: int) -> None:
     # a tương đương b 3,9,18
     cnf.append([-a, b])
     cnf.append([-b, a])

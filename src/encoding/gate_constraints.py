@@ -29,7 +29,7 @@ class GateConstraints(ConstraintGroup):
                                    self.pool.a(g, t),
                                    self.pool.d(g, t)])
             
-    def _constrain_8(self, t: int) -> None:
+    def _constraint_8(self, t: int) -> None:
         for gate in self.circuit.gates:
             g = gate.gate_id
             c_g = self.pool.c(g, t)
@@ -43,38 +43,43 @@ class GateConstraints(ConstraintGroup):
                 implies(self.cnf, d_g, d_g2)
 
             for gate2 in self._dag.predecessors(g):
-                a_g2 = self.pool.d(gate2, t)
+                a_g2 = self.pool.a(gate2, t)
                 
                 implies(self.cnf, c_g, a_g2)
                 implies(self.cnf, a_g, a_g2)
             
     def _constraint_9(self, t: int) -> None:
         for gate in self.circuit.gates:
-            g = gate.gate_id
-            a_t = self.pool.a(g, t)
-            a_t_1 = self.pool.a(g, t-1)
-            c_t = self.pool.c(g, t)
-            c_t_1 = self.pool.c(g, t-1)
-            d_t = self.pool.d(g, t)
-            d_t_1 = self.pool.d(g, t-1)
-
-            iff(self.cnf, c_t_1, a_t)
-            iff(self.cnf, a_t_1, a_t)
-
-            iff_or(self.cnf, d_t_1, [c_t, d_t])
+            g    = gate.gate_id
+            c_t1 = self.pool.c(g, t - 1)
+            a_t1 = self.pool.a(g, t - 1)
+            a_t  = self.pool.a(g, t)
+            d_t1 = self.pool.d(g, t - 1)
+            c_t  = self.pool.c(g, t)
+            d_t  = self.pool.d(g, t)
+ 
+            implies(self.cnf, c_t1, a_t)
+            implies(self.cnf, a_t1, a_t)
+ 
+            self.cnf.append([-a_t, c_t1, a_t1])
+ 
+            self.cnf.append([-d_t1, c_t, d_t])
+ 
+            implies(self.cnf, c_t, d_t1)
+            implies(self.cnf, d_t, d_t1)
 
     def _constraint_10(self, t: int) -> None:
         for gate in self.circuit.gates:
             g = gate.gate_id
-            c_g = self.pool.c(g, int)
+            c_g = self.pool.c(g, t)
 
             for g2 in self._dag.full_successors(g):
-                c_g_2 = self.pool.c(g2, int)
-                implies(self.cnf, c_g, c_g_2)
+                c_g_2 = self.pool.c(g2, t)
+                implies(self.cnf, c_g, -c_g_2)
 
             for g2 in self._dag.full_predecessors(g):
-                c_g_2 = self.pool.c(g2, int)
-                implies(self.cnf, c_g, c_g_2)
+                c_g_2 = self.pool.c(g2, t)
+                implies(self.cnf, c_g, -c_g_2)
 
     def _constraint_11_12(self, t: int) -> None:
         n_phys = self.topology.n_qubits

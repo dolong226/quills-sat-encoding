@@ -4,7 +4,7 @@ from pysat.formula import CNF
 
 from circuit.parser import Circuit
 from quills_platform.topology import Topology
-from variables import VarPool
+from encoding.variables import VarPool
 
 class ConstraintGroup(ABC):
     def __init__(
