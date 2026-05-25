@@ -36,6 +36,8 @@ class SolverResult:
     # initial_mapping[q] = p at t=1
     initial_mapping: dict[int, int] = field(default_factory=dict)
 
+    mapping_at_t: dict[int, dict[int, int]] = field(default_factory=dict)
+    
     # schedule[t][g] = True if gate g exe at t
     schedule: dict[int, list[int]] = field(default_factory=dict)
 
@@ -103,6 +105,44 @@ class QuilLSEngine:
         
         result = SolverResult(sat=False, optimal_depth=-1)
 
+        # with SolverFactory.create(self._solver_tag) as solver:
+        #     for t in range(1, self.max_depth + 1):
+        #         mapping.encode(t)
+        #         connectivity.encode(t)
+        #         gates.encode(t)
+        #         swap.encode(t)
+
+        #         self._flush_clauses(solver)
+
+        #         result.iterations = t
+
+        #         if t < lower_bound:
+        #             continue
+
+        #         assumptions.encode(t)
+        #         self._flush_clauses(solver)
+
+        #         asm_lit = assumptions.assumption_lit(t)
+
+        #         if self.verbose:
+        #             log.info("  t=%d  solving ...", t)
+
+        #         sat = solver.solve(assumptions=[asm_lit])
+
+        #         if sat:
+        #             model = solver.get_model()
+        #             result.sat           = True
+        #             result.optimal_depth = t
+        #             result.model         = model
+        #             result.elapsed_sec   = time.perf_counter() - t_start
+        #             if self.verbose:
+        #                 log.info("  SAT at t=%d", t)
+        #             self._extract_solution(result)
+        #             return result
+        #         else:
+        #             if self.verbose:
+        #                 log.info("  UNSAT, at t=%d", t)
+
         with SolverFactory.create(self._solver_tag) as solver:
             for t in range(1, self.max_depth + 1):
                 mapping.encode(t)
@@ -155,12 +195,18 @@ class QuilLSEngine:
         pool = self._pool
         t_star = result.optimal_depth
  
-        # init_mapping
-        for q in range(self.circuit.n_qubits):
-            for p in range(self.topology.n_qubits):
-                if pool.mp(q, p, 1) in true_vars:
-                    result.initial_mapping[q] = p
-                    break
+        # mapping_at_t[t][q] = p  cho mọi t từ 1 đến t_star
+        for t in range(1, t_star + 1):
+            mapping_t: dict[int, int] = {}
+            for q in range(self.circuit.n_qubits):
+                for p in range(self.topology.n_qubits):
+                    if pool.mp(q, p, t) in true_vars:
+                        mapping_t[q] = p
+                        break
+            result.mapping_at_t[t] = mapping_t
+ 
+        # initial_mapping = mapping tại t=1 
+        result.initial_mapping = result.mapping_at_t.get(1, {})
  
         # Schedule
         for t in range(1, t_star + 1):
@@ -170,6 +216,7 @@ class QuilLSEngine:
                     executing.append(gate.gate_id)
             if executing:
                 result.schedule[t] = executing
+ 
  
 
     # Internal helpers
