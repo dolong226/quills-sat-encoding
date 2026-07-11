@@ -1,11 +1,6 @@
 # Standard topologies: line, tenerife, guadalupe,...
 from quills_platform.topology import Topology
 
-def line_topology(n: int) -> Topology:
-    edges = [(i, i+1) for i in range (n-1)]
-
-    return Topology(n_qubits=n, edges=edges)
-
 def ibmq_guadalupe() -> Topology:
     return Topology(
         n_qubits=16,

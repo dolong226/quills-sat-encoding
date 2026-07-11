@@ -44,7 +44,8 @@ class SwapConstraints(ConstraintGroup):
             sw_lit = self.pool.sw(p, p2, t)
             oc_p   = self.pool.oc(p,  t)
             oc_p2  = self.pool.oc(p2, t)
-            # sw → (oc_p ∨ oc_p2)
+            # sw -> (oc_p ∨ oc_p2)
+            bs = [oc_p, oc_p2]
             self.cnf.append([-sw_lit, oc_p, oc_p2])
 
     def _constraint_17(self, t: int) -> None:

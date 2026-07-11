@@ -3,7 +3,7 @@
 1. mapping_completeness  — mọi qubit logic có ánh xạ vật lý riêng, không trùng
 2. all_gates_scheduled   — mọi gate xuất hiện đúng 1 lần trong schedule
 3. no_gate_duplicates    — không gate nào bị lên lịch 2 lần
-4. dependency_ordering   — nếu A → B (data dep), thì t(A) < t(B)
+4. dependency_ordering   — nếu A -> B (data dep), thì t(A) < t(B)
 5. cx_connectivity       — CX gate chỉ chạy trên cặp physical qubit kề nhau
 6. no_physical_conflicts — mỗi timestep, mỗi physical qubit dùng bởi tối đa 1 gate
 """
@@ -82,11 +82,10 @@ def print_report(
     print(f"Validation  |  {circuit}  |  depth={result.optimal_depth}")
     print(sep)
     for name, passed, msg in report:
-        icon = "✓" if passed else "✗"
-        print(f"  {icon}  {name:<26}  {msg}")
+        print(f" {name:<26}  {msg}")
     print(sep)
     all_passed = all(p for _, p, _ in report)
-    print("  Result:", "VALID ✓" if all_passed else "INVALID ✗")
+    print("  Result:", "VALID" if all_passed else "INVALID")
     print(sep)
 
 
@@ -190,7 +189,7 @@ def _check_cx_connectivity(
  
             if not topology.is_connected(ctrl_phys, tgt_phys):
                 raise ValidationError(
-                    f"[cx_connectivity] g{gid} (CX q{gate.control_qubit}→q{gate.target_qubit}) "
+                    f"[cx_connectivity] g{gid} (CX q{gate.control_qubit}->q{gate.target_qubit}) "
                     f"at t={t}: p{ctrl_phys}-p{tgt_phys} not adjacent in topology."
                 )
 

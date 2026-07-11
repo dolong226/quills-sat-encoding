@@ -18,8 +18,7 @@ class ConstraintGroup(ABC):
         self.pool = pool
         self.circuit = circuit
         self.topology = topology
-
-
+    
     @abstractmethod
     def encode(self, t: int) -> None:
         # Thêm mọi clauses ở bước t vào cnf.

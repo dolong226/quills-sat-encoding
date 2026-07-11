@@ -36,13 +36,11 @@ class SolverResult:
     # initial_mapping[q] = p at t=1
     initial_mapping: dict[int, int] = field(default_factory=dict)
 
-    mapping_at_t: dict[int, dict[int, int]] = field(default_factory=dict)
-    
     # schedule[t][g] = True if gate g exe at t
     schedule: dict[int, list[int]] = field(default_factory=dict)
 
     elapsed_sec: float = 0.0
-    iterations: int = 0 # number of t inc tried
+    iterations: int = 0 # number of t tried
 
     def __str__(self) -> str:
         if not self.sat:
@@ -61,7 +59,7 @@ class QuilLSEngine:
         circuit: Circuit,
         topology: Topology,
         solver_tag: str | None = None,
-        verbose: bool = True, # log
+        verbose: bool = True,
     ) -> None:
         self.circuit   = circuit
         self.topology  = topology
@@ -76,81 +74,94 @@ class QuilLSEngine:
         self._best_pool: VarPool | None = None
 
 
-    # entry points
+    # entry point
     def run(self) -> SolverResult:
         t_start = time.perf_counter()
 
-        self._cnf  = CNF()
-        self._pool = VarPool()
-        self._dag  = build_dependency_dag(self.circuit)
-
-        mapping      = MappingConstraints(self._cnf, self._pool, self.circuit, self.topology)
-        connectivity = ConnectivityConstraints(self._cnf, self._pool, self.circuit, self.topology)
-        gates        = GateConstraints(self._cnf, self._pool, self.circuit, self.topology, self._dag)
-        swap         = SwapConstraints(self._cnf, self._pool, self.circuit, self.topology)
-        assumptions  = AssumptionConstraints(self._cnf, self._pool, self.circuit, self.topology)
-
-        gates.init_static()
-        swap.init_static()
+        self._dag = build_dependency_dag(self.circuit)
 
         lower_bound = self._critical_path_depth()
+
+        # Upper bound: số gate là giới hạn tự nhiên (mỗi gate chiếm ít nhất 1 bước)
+        upper_bound = len(self.circuit.gates)
+
+        # Đảm bảo UB >= LB
+        upper_bound = max(upper_bound, lower_bound)
+
         if self.verbose:
             log.info(
-                "Starting QuilLS | circuit=%s | topology=%dq | "
-                "solver=%s | lower_bound=%d",
+                "Starting QuilLS (UB-first) | circuit=%s | topology=%dq | "
+                "solver=%s | lower_bound=%d | upper_bound=%d",
                 self.circuit, self.topology.n_qubits,
-                self._solver_tag, lower_bound,
+                self._solver_tag, lower_bound, upper_bound,
             )
-        
+
         result = SolverResult(sat=False, optimal_depth=-1)
+        iterations = 0
 
-        with SolverFactory.create(self._solver_tag) as solver:
-            t = 1
-            while t >= 1:
-                mapping.encode(t)
-                connectivity.encode(t)
-                gates.encode(t)
-                swap.encode(t)
+        # Vòng lặp giảm dần từ UB xuống LB.
+        # Vì mỗi lần t thay đổi ta cần encode lại toàn bộ từ bước 1..t,
+        # không thể tái sử dụng solver cũ → rebuild CNF + solver mỗi vòng.
+        for t in range(upper_bound, lower_bound - 1, -1):
+            iterations += 1
 
-                self._flush_clauses(solver)
+            # --- Xây CNF mới cho horizon t ---
+            self._cnf  = CNF()
+            self._pool = VarPool()
 
-                result.iterations = t
+            mapping      = MappingConstraints(self._cnf, self._pool, self.circuit, self.topology)
+            connectivity = ConnectivityConstraints(self._cnf, self._pool, self.circuit, self.topology)
+            gates        = GateConstraints(self._cnf, self._pool, self.circuit, self.topology, self._dag)
+            swap         = SwapConstraints(self._cnf, self._pool, self.circuit, self.topology)
+            assumptions  = AssumptionConstraints(self._cnf, self._pool, self.circuit, self.topology)
 
-                if t < lower_bound:
-                    t+=1
-                    continue
+            gates.init_static()
+            swap.init_static()
 
-                assumptions.encode(t)
-                self._flush_clauses(solver)
+            for step in range(1, t + 1):
+                mapping.encode(step)
+                connectivity.encode(step)
+                gates.encode(step)
+                swap.encode(step)
+
+            assumptions.encode(t)
+
+            if self.verbose:
+                log.info("  t=%d  solving ...", t)
+
+            # --- Giải ---
+            with SolverFactory.create(self._solver_tag) as solver:
+                for clause in self._cnf.clauses:
+                    solver.add_clause(clause)
 
                 asm_lit = assumptions.assumption_lit(t)
-
-                if self.verbose:
-                    log.info("  t=%d  solving ...", t)
-
                 sat = solver.solve(assumptions=[asm_lit])
 
                 if sat:
-                    model = solver.get_model()
+                    # Lưu kết quả tốt nhất, tiếp tục giảm t
                     result.sat           = True
                     result.optimal_depth = t
-                    result.model         = model
-                    result.elapsed_sec   = time.perf_counter() - t_start
+                    result.model         = solver.get_model()
+                    self._best_pool      = self._pool   # giữ pool để extract sau
                     if self.verbose:
-                        log.info("  SAT at t=%d", t)
-                    self._extract_solution(result)
-                    return result
+                        log.info("  SAT at t=%d, trying t=%d ...", t, t - 1)
                 else:
+                    # UNSAT tại t → không thể làm nhỏ hơn nữa
                     if self.verbose:
-                        log.info("  UNSAT, at t=%d", t)
-                t+=1
- 
+                        log.info("  UNSAT at t=%d → optimal depth is t=%d", t, t + 1)
+                    break
+
+        result.iterations  = iterations
         result.elapsed_sec = time.perf_counter() - t_start
+
+        if result.sat:
+            # Dùng pool của lần SAT cuối cùng để trích nghiệm
+            self._pool = self._best_pool
+            self._extract_solution(result)
+
         return result
-    
 
-    # Solution extract
-
+    # Solution extract                                                     
     def _extract_solution(self, result: SolverResult) -> None:
         if not result.model or self._pool is None:
             return
@@ -159,20 +170,14 @@ class QuilLSEngine:
         pool = self._pool
         t_star = result.optimal_depth
  
-        # mapping_at_t[t][q] = p  cho mọi t từ 1 đến t_star
-        for t in range(1, t_star + 1):
-            mapping_t: dict[int, int] = {}
-            for q in range(self.circuit.n_qubits):
-                for p in range(self.topology.n_qubits):
-                    if pool.mp(q, p, t) in true_vars:
-                        mapping_t[q] = p
-                        break
-            result.mapping_at_t[t] = mapping_t
+        # initial_mapping
+        for q in range(self.circuit.n_qubits):
+            for p in range(self.topology.n_qubits):
+                if pool.mp(q, p, 1) in true_vars:
+                    result.initial_mapping[q] = p
+                    break
  
-        # initial_mapping = mapping tại t=1 
-        result.initial_mapping = result.mapping_at_t.get(1, {})
- 
-        # Schedule
+        # schedule
         for t in range(1, t_star + 1):
             executing = []
             for gate in self.circuit.gates:
@@ -180,24 +185,21 @@ class QuilLSEngine:
                     executing.append(gate.gate_id)
             if executing:
                 result.schedule[t] = executing
- 
- 
+        
 
-    # Internal helpers
+    # Internal helpers                                                     
     def _flush_clauses(self, solver: SolverBase) -> None:
         for clause in self._cnf.clauses:
             solver.add_clause(clause)
         self._cnf.clauses.clear()
  
     def _critical_path_depth(self) -> int:
-        if self._dag is None:
-            return 1
- 
+        self._dag = self._dag or build_dependency_dag(self.circuit)
+
         gates = self.circuit.gates
         if not gates:
             return 1
  
-        # 
         memo: dict[int, int] = {}
  
         def longest(g: int) -> int:

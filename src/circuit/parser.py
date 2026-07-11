@@ -15,7 +15,7 @@ class Circuit:
     
 
 # Supported Gate Sets
-_UNARY_GATES = {"h", "s", "x", "y", "z", "t", "tdg", "rx", "ry", "rz", "u1", "u2", "u3", "id"}
+_UNARY_GATES = {"u", "h", "s", "x", "y", "z", "t", "tdg", "rx", "ry", "rz", "u1", "u2", "u3", "id"}
 
 _QUBIT_RE = re.compile(r"\w+\[(\d+)\]")
 
@@ -59,6 +59,7 @@ def parse_qasm(path: str) -> Circuit:
             args_str = parts[1] if len(parts) > 1 else ""
 
             # Extract qubit indices (q[1], q[3] -> [1,3])
+            qubit_str = args_str.split(")")[-1] if ")" in args_str else args_str
             qubit_indices = [int(m) for m in _QUBIT_RE.findall(args_str)]
 
 

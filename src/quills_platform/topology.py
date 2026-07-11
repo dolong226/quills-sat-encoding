@@ -60,7 +60,7 @@ class Topology:
 
     @property
     def nodes(self) -> List[int]:
-        return list(range(self.n_quits))
+        return list(range(self.n_qubits))
     
     @property
     def edge_set(self) -> Set[Tuple[int, int]]:

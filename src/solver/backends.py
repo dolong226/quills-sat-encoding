@@ -39,18 +39,14 @@ class CaDiCaL195(_PySatWrapper):
 class CaDiCaL153(_PySatWrapper):
     _SOLVER_TAG = "cadical153"
  
- 
 class Kissat404(_PySatWrapper):
     _SOLVER_TAG = "kissat404"
- 
  
 class Glucose42(_PySatWrapper):
     _SOLVER_TAG = "glucose42"
  
- 
 class Glucose4(_PySatWrapper):
     _SOLVER_TAG = "glucose4"
- 
  
 class MapleChronoBT(_PySatWrapper):
     _SOLVER_TAG = "maplechrono"
