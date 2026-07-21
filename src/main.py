@@ -153,23 +153,60 @@ def _run_single(
 
     t0 = time.perf_counter()
     p.start()
-    p.join(timeout=timeout_sec)
+
+    # QUAN TRỌNG: phải đọc queue TRƯỚC khi join(), không phải sau.
+    # multiprocessing.Queue dùng pipe nội bộ có buffer giới hạn (Windows: ~64KB).
+    # Nếu process con put() một object lớn (circuit + model + schedule...) rồi
+    # cố thoát, nhưng cha lại đang p.join() chờ con thoát hẳn TRƯỚC KHI đọc
+    # queue, thì con bị kẹt chờ cha đọc bớt pipe để flush hết, còn cha thì
+    # đang chờ con thoát -> deadlock kinh điển, và cha sẽ luôn bị treo đúng
+    # bằng đúng timeout_sec dù con đã tính xong từ lâu.
+    # Poll thay vì get(timeout=timeout_sec) một phát: nếu process con crash
+    # trước khi kịp put() gì cả (không phải timeout thật), ta phát hiện ngay
+    # qua p.is_alive() thay vì phải đợi hết timeout_sec mới biết.
+    got_result   = False
+    crashed      = False
+    tag = payload = solved_circuit = None
+    poll_step = 0.2
+    while True:
+        remaining = timeout_sec - (time.perf_counter() - t0)
+        if remaining <= 0:
+            break
+        try:
+            tag, payload, solved_circuit = queue.get(timeout=min(poll_step, remaining))
+            got_result = True
+            break
+        except Exception:
+            if not p.is_alive():
+                try:
+                    tag, payload, solved_circuit = queue.get_nowait()
+                    got_result = True
+                except Exception:
+                    crashed = True
+                break
+
     elapsed = time.perf_counter() - t0
 
-    if p.is_alive():
-        p.terminate()
+    if crashed and not got_result:
+        p.join()
+        entry.elapsed_sec = elapsed
+        entry.status = "ERROR"
+        log.error("  ERROR    %-40s  process exited with no result", qasm_path.name)
+        return entry
+
+    if not got_result:
+        if p.is_alive():
+            p.terminate()
         p.join()
         entry.elapsed_sec = elapsed
         log.warning("  TIMEOUT  %-40s  (%.1fs)", qasm_path.name, elapsed)
         return entry
 
-    try:
-        tag, payload, solved_circuit = queue.get_nowait()
-    except Exception:
-        entry.elapsed_sec = elapsed
-        entry.status = "ERROR"
-        log.error("  ERROR    %-40s  process exited with no result", qasm_path.name)
-        return entry
+    # Đã có kết quả -> process con lẽ ra sắp/ đã thoát, join gọn để dọn dẹp
+    p.join(timeout=5)
+    if p.is_alive():
+        p.terminate()
+        p.join()
 
     if tag == "error":
         entry.elapsed_sec = elapsed
@@ -219,12 +256,6 @@ def _run_batch(
     )
     log.info("-" * 70)
 
-    # entries = [
-    #     _run_single(f, topology_name, solver_tag, timeout_sec, validate)
-    #     for f in qasm_files
-    # ]
-
-    # for debugging
     entries = []
 
     for i, f in enumerate(qasm_files):
@@ -237,10 +268,9 @@ def _run_batch(
             timeout_sec=timeout_sec,
             validate=validate,
         )
+        entries.append(entry)
 
         print(f"===== DONE {i} =====", flush=True)
-
-    entries.append(entry)
 
     # Summary
     total     = len(entries)
