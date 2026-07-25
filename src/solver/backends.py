@@ -16,7 +16,16 @@ class _PySatWrapper (SolverBase):
     
     def get_model(self) -> list[int]:
         return self._solver.get_model() or []
-    
+
+    def stats(self) -> dict:
+        return self._solver.accum_stats()
+
+    def nof_vars(self) -> int:
+        return self._solver.nof_vars()
+
+    def nof_clauses(self) -> int:
+        return self._solver.nof_clauses()
+
     def close(self) -> None:
         self._solver.delete()
 
