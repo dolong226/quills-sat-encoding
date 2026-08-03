@@ -39,14 +39,28 @@ class SwapConstraints(ConstraintGroup):
                     continue
                 implies(self.cnf, st_p, -self.pool.u(p, t2))
 
+    # constraint 16: anc = False
+    # def _constraint_16(self, t: int) -> None:
+    #     for (p, p2) in self.topology.edge_set:
+    #         sw_lit = self.pool.sw(p, p2, t)
+    #         oc_p   = self.pool.oc(p,  t)
+    #         oc_p2  = self.pool.oc(p2, t)
+    #         # sw -> (oc_p ∨ oc_p2)
+    #         bs = [oc_p, oc_p2]
+    #         self.cnf.append([-sw_lit, oc_p, oc_p2])
+
+    # constraint 16: anc = True
     def _constraint_16(self, t: int) -> None:
         for (p, p2) in self.topology.edge_set:
             sw_lit = self.pool.sw(p, p2, t)
-            oc_p   = self.pool.oc(p,  t)
-            oc_p2  = self.pool.oc(p2, t)
-            # sw -> (oc_p ∨ oc_p2)
-            bs = [oc_p, oc_p2]
-            self.cnf.append([-sw_lit, oc_p, oc_p2])
+            implies_all(
+                self.cnf,
+                sw_lit,
+                [
+                    self.pool.oc(p, t),
+                    self.pool.oc(p2, t),
+                ],
+            )
 
     def _constraint_17(self, t: int) -> None:
         for p in range(self.topology.n_qubits):
