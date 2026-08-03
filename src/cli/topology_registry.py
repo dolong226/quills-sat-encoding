@@ -11,6 +11,6 @@ TOPOLOGY_PRESETS: dict[str, str] = {
 
 
 def build_topology(name: str) -> Topology:
-    if name.lower() == "guadalupe":
+    if name.lower() == "ibmq_guadalupe":
         return ibmq_guadalupe()
     raise ValueError(f"Unknown topology '{name}'. Available: {', '.join(TOPOLOGY_PRESETS)}")

@@ -47,7 +47,7 @@ examples:
     # ── 2. Bài toán: topology / solver / giới hạn depth ────────────────────────
     p.add_argument(
         "--topology", "-t",
-        default="guadalupe",
+        default="ibmq_guadalupe",
         metavar="NAME",
         help="Topology phần cứng — quy định các cặp qubit vật lý được kết nối ",
     )
@@ -64,6 +64,12 @@ examples:
         default=10000,
         metavar="N",
         help="Giới hạn trên tuyệt đối cho makespan/depth - dùng để tránh vòng lặp "
+    )
+    p.add_argument(
+        "--cxdepth",
+        action="store_true",
+        help="Tối ưu CX-depth (chỉ đếm timestep có ít nhất 1 CX gate) thay vì "
+             "circuit depth thường. Áp dụng cho cả --tool lb và ub. Mặc định TẮT.",
     )
 
     # ── 3. Thuật toán tìm optimal depth: lb (mặc định) hoặc ub ─────────────────
@@ -90,6 +96,14 @@ examples:
     )
 
     # ── 4. Batch mode: timeout / output / đệ quy ───────────────────────────────
+    p.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Chạy mỗi benchmark N lần rồi lấy trung bình (mean/std/min/max) thay vì "
+             "tin vào 1 lần chạy duy nhất. Mặc định: 1 (không lặp).",
+    )
     p.add_argument(
         "--timeout",
         type=float,
