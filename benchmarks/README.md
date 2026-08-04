@@ -17,3 +17,6 @@ The benchmarks follow the OPENQASM 2.0 standard.
 
 ### Logical Dependencies:
 The order of iinstructions defines the Dependency Graph.
+
+### Transpile Circuit
+python .\transpile_investigation\transpile_for_quills.py .\benchmarks\collection guadalupe -o .\benchmarks\transpiled --batch
