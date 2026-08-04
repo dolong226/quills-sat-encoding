@@ -41,6 +41,18 @@ _FAKE_BACKEND_NAMES = {
 }
 
 
+# Platform KHÔNG phải chip IBM (vd Sycamore của Google) -> không có Fake
+# backend nào trong qiskit-ibm-runtime cả (thư viện này chỉ chứa backend
+# IBM). quills gốc chỉ MƯỢN đồ thị kết nối của các chip này làm topology,
+# vẫn dùng chung basis gate IBM (rz,sx,x,cx,id) như mọi platform khác — nên
+# chỉ cần biết SỐ QUBIT, không cần backend object thật.
+_NON_IBM_PLATFORM_QUBITS = {
+    "sycamore": 54,
+}
+
+_IBM_NATIVE_BASIS = ["id", "rz", "sx", "x", "cx", "reset"]
+
+
 def _get_fake_backend_class(platform: str):
     name_v1, name_v2 = _FAKE_BACKEND_NAMES[platform]
     if hasattr(_fp, name_v1):
@@ -84,32 +96,48 @@ def _trim_to_logical_qubits(circuit: QuantumCircuit, num_qubits: int) -> Quantum
     return output_circuit
 
 def transpile_for_quills(qasm_path: str, platform: str) -> str:
-    if platform not in _FAKE_BACKEND_NAMES:
-        raise ValueError(f"Platform '{platform}' chưa hỗ trợ. Có: {list(_FAKE_BACKEND_NAMES)}")
-
-    backend_cls = _get_fake_backend_class(platform)
-    backend = backend_cls()
-    n_qubits = (
-        backend.configuration().n_qubits
-        if hasattr(backend, "configuration")
-        else backend.num_qubits
-    )
-
-    full_connectivity = [
-        [p1, p2] for p1 in range(n_qubits) for p2 in range(n_qubits) if p1 != p2
-    ]
+    all_platforms = set(_FAKE_BACKEND_NAMES) | set(_NON_IBM_PLATFORM_QUBITS)
+    if platform not in all_platforms:
+        raise ValueError(f"Platform '{platform}' chưa hỗ trợ. Có: {sorted(all_platforms)}")
 
     input_circuit = QuantumCircuit.from_qasm_file(qasm_path)
-    transpiled = transpile(input_circuit, backend=backend, coupling_map=full_connectivity)
-    trimmed = _trim_to_logical_qubits(transpiled, input_circuit.num_qubits)
 
+    if platform in _FAKE_BACKEND_NAMES:
+        # Platform IBM thật -> dùng backend= (như Anders làm), để basis gate
+        # lấy đúng từ backend đó (dù thực ra vẫn luôn là rz,sx,x,cx,id,reset).
+        backend_cls = _get_fake_backend_class(platform)
+        backend = backend_cls()
+        n_qubits = (
+            backend.configuration().n_qubits
+            if hasattr(backend, "configuration")
+            else backend.num_qubits
+        )
+        full_connectivity = [
+            [p1, p2] for p1 in range(n_qubits) for p2 in range(n_qubits) if p1 != p2
+        ]
+        transpiled = transpile(input_circuit, backend=backend, coupling_map=full_connectivity)
+    else:
+        # Platform không phải IBM (sycamore, ...) -> không có backend object,
+        # chỉ cần basis_gates (cố định IBM-native để nhất quán với mọi
+        # platform khác) + coupling_map all-to-all kích thước đúng n_qubits.
+        n_qubits = _NON_IBM_PLATFORM_QUBITS[platform]
+        full_connectivity = [
+            [p1, p2] for p1 in range(n_qubits) for p2 in range(n_qubits) if p1 != p2
+        ]
+        transpiled = transpile(
+            input_circuit, basis_gates=_IBM_NATIVE_BASIS, coupling_map=full_connectivity
+        )
+
+    trimmed = _trim_to_logical_qubits(transpiled, input_circuit.num_qubits)
     return _circuit_to_qasm(trimmed)
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("input", help="File .qasm, hoặc thư mục nếu dùng --batch")
-    p.add_argument("platform", choices=list(_FAKE_BACKEND_NAMES), help="Platform đích")
+    p.add_argument("platform",
+                    choices=sorted(set(_FAKE_BACKEND_NAMES) | set(_NON_IBM_PLATFORM_QUBITS)),
+                    help="Platform đích")
     p.add_argument("-o", "--output", required=True,
                     help="File .qasm đích (single mode), hoặc thư mục đích (--batch)")
     p.add_argument("--batch", action="store_true",
