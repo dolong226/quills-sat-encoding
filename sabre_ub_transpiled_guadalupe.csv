@@ -1,0 +1,16 @@
+benchmark,ub
+4gt13_92,185
+4mod5-v1_22,54
+adder,31
+barenco_tof_4,172
+barenco_tof_5,282
+mod5mils_65,107
+mod_mult_55,198
+or,41
+qaoa5,20
+qft_8,146
+rc_adder_6,305
+tof_4,103
+tof_5,148
+toffoli,28
+vbe_adder_3,197

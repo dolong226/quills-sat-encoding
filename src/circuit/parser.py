@@ -15,7 +15,15 @@ class Circuit:
     
 
 # Supported Gate Sets
-_UNARY_GATES = {"u", "h", "s", "x", "y", "z", "t", "tdg", "rx", "ry", "rz", "u1", "u2", "u3", "id"}
+# QUAN TRỌNG: "sx" (√X, sqrt-X) là 1 trong các gate NATIVE của basis IBM
+# ['id','rz','sx','x','cx','reset'] — nếu thiếu, mạch đã transpile (theo đúng
+# quy trình của tác giả gốc, xem transpile_for_quills.py) sẽ bị ÂM THẦM MẤT
+# phần lớn gate (thực tế đo được: 29/48 gate của vqe_8_1_5_100.qasm sau
+# transpile là "sx" — thiếu "sx" nghĩa là mất ~60% mạch mà không có lỗi nào
+# được báo ra). "id" (identity, gate rỗng) và "reset" cũng thuộc basis này —
+# "id" đã có sẵn ở đây, "reset" được xử lý riêng bên dưới (bỏ qua, giống
+# creg/measure/barrier, vì reset không cần lịch trình hoá trong mô hình depth).
+_UNARY_GATES = {"u", "h", "s", "x", "y", "z", "t", "tdg", "rx", "ry", "rz", "u1", "u2", "u3", "id", "sx", "sxdg"}
 
 _QUBIT_RE = re.compile(r"\w+\[(\d+)\]")
 
@@ -43,8 +51,10 @@ def parse_qasm(path: str) -> Circuit:
 
                 continue
 
-            # Ignore classical operations
-            if line.startswith(("creg", "measure", "barrier")):
+            # Ignore classical operations / operations không cần lịch trình hoá
+            # ("reset" thuộc basis IBM native ['id','rz','sx','x','cx','reset']
+            # — có thể xuất hiện trong mạch đã transpile)
+            if line.startswith(("creg", "measure", "barrier", "reset")):
                 continue
 
             # Parser gate instruction

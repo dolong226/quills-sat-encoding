@@ -1,0 +1,2 @@
+t,phase,sat,elapsed_sec,conflicts,decisions,propagations,restarts,n_vars,n_clauses,var_counts_delta,clause_counts_delta
+14,lb,True,0.002513299994461704,98,1570,11645,4,4325,64570,"{""a"": 308, ""sw"": 224, ""mp"": 1120, ""oc"": 224, ""e"": 140, ""c"": 308, ""d"": 308, ""u"": 224, ""_amn_r"": 1244, ""st"": 224, ""asm"": 1}","{""mapping"": 12054, ""connectivity"": 33712, ""gates"": 15800, ""swap"": 11052, ""assumptions"": 22}"

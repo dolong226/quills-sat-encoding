@@ -12,6 +12,7 @@ from typing import Optional
 from pysat.formula import CNF
 
 from circuit.parser import Circuit
+from circuit.gate import Gate, GateType
 from quills_platform.topology import Topology
 from circuit.dag import DAG, build_dependency_dag
 
@@ -34,7 +35,10 @@ log = logging.getLogger(__name__)
 @dataclass
 class SolverResult:
     sat: bool
-    optimal_depth: int
+    optimal_depth: int   # giá trị objective ĐÃ ĐƯỢC TỐI ƯU (xem `objective` để biết là gì)
+
+    objective: str = "depth"  # "depth" (circuit depth thường) | "cxdepth" (CX-depth) —
+                                # cho biết optimal_depth ở trên đang mang ý nghĩa nào
 
     model: list[int] = field(default_factory=list)
 
@@ -50,11 +54,32 @@ class SolverResult:
     elapsed_sec: float = 0.0
     iterations: int = 0 # number of t tried
 
+    # Metrics phụ — LUÔN được tính post-hoc (từ schedule/model) sau khi SAT,
+    # BẤT KỂ `objective` đang tối ưu cái gì. Mục đích: dù chạy --tool lb (tối
+    # ưu depth thường) hay --cxdepth (tối ưu CX-depth), người dùng luôn thấy
+    # đủ cả 3 con số để so sánh (xem runner/single.py, runner/types.py).
+    depth:    int = -1  # tổng depth thực dùng (mọi timestep, kể cả timestep chỉ có unary gate)
+    cx_depth: int = -1  # số timestep PHÂN BIỆT có ít nhất 1 CX gate thực thi
+    cx_count: int = -1  # tổng CX-count của mạch đã map = CX gốc (const) + 3 * số SWAP dùng
+
+    # Lower bound lý thuyết (critical path) đã dùng làm điểm xuất phát cho
+    # search — LUÔN được điền (kể cả không có --verbose), để người dùng biết
+    # search đã bắt đầu từ đâu và optimal_depth cách lower_bound bao xa.
+    lower_bound: int = -1
+
     def __str__(self) -> str:
         if not self.sat:
             return "UNSAT"
+        if self.objective == "cxdepth":
+            return (
+                f"SAT | optimal_cxdepth={self.optimal_depth} | depth={self.depth} | "
+                f"cx_count={self.cx_count} | lower_bound={self.lower_bound} | "
+                f"iterations={self.iterations} | "
+                f"time={self.elapsed_sec:.3f}s"
+            )
         return (
-            f"SAT | depth={self.optimal_depth} | "
+            f"SAT | optimal_depth={self.optimal_depth} | cx_depth={self.cx_depth} | "
+            f"cx_count={self.cx_count} | lower_bound={self.lower_bound} | "
             f"iterations={self.iterations} | "
             f"time={self.elapsed_sec:.3f}s"
         )
@@ -69,11 +94,23 @@ class QuilLSEngine:
         solver_tag: str | None = None,
         verbose: bool = True, # log
         mode: str = "lb",          # "lb" (tăng dần từ lower bound) | "ub" (giảm dần từ upper bound)
+        cxdepth: bool = False,     # True: tối ưu CX-depth (chỉ đếm timestep có ≥1 CX gate)
+                                    # THAY VÌ circuit depth thường (đếm mọi timestep). Áp dụng
+                                    # cho cả mode="lb" và mode="ub". Xem _run_lb()/ghi chú
+                                    # NotImplementedError bên dưới — phần lõi CẦN encoding/
+                                    # gate_constraints.py + encoding/assumptions.py +
+                                    # encoding/variables.py (chưa có trong repo hiện tại) để
+                                    # cài đặt đúng biến L(t) = "timestep t có ≥1 CX" và
+                                    # cardinality constraint Σ L(t) ≤ k.
         ub: Optional[int] = None,  # chỉ dùng khi mode="ub": upper bound khởi điểm để probe.
                                     # Nếu None -> heuristic tạm: len(gates) * 2.
         ub_search: str = "binary", # chỉ dùng khi mode="ub": "binary" (nhị phân) | "linear" (giảm tuần tự từng t)
         solve_logger: Optional[SolveLogger] = None,  # nếu truyền vào, ghi lại
                                     # thống kê (conflicts/decisions/...) cho mỗi lần solve()
+        progress_queue = None,  # nếu truyền vào (vd multiprocessing.Queue), gửi
+                                    # "tiến độ tạm thời" sau mỗi lần solve() —
+                                    # để timeout giữa chừng vẫn cứu được kết quả tốt
+                                    # nhất đã tìm ra (xem _report_progress bên dưới).
     ) -> None:
         self.circuit   = circuit
         self.topology  = topology
@@ -83,12 +120,16 @@ class QuilLSEngine:
             raise ValueError(f"mode phải là 'lb' hoặc 'ub', nhận được: {mode!r}")
         self.mode = mode
         self._ub_hint = ub
+        self._cxdepth = cxdepth
 
         if ub_search not in ("binary", "linear"):
             raise ValueError(f"ub_search phải là 'binary' hoặc 'linear', nhận được: {ub_search!r}")
         self._ub_search = ub_search
 
         self._solve_logger = solve_logger
+        self._progress_queue = progress_queue
+        self._progress_best_ub: Optional[int] = None   # best_sat_t nhỏ nhất đã thấy (mode=ub)
+        self._progress_lb_ctx: int = -1                # lower_bound để đính kèm vào progress report
 
         self._solver_tag = solver_tag or SolverFactory.default_tag()
 
@@ -108,8 +149,24 @@ class QuilLSEngine:
         self._prev_var_counts:        dict[str, int] = {}
 
 
+    def _report_progress(self, **kwargs) -> None:
+        """Gửi tiến độ tạm thời qua progress_queue (nếu có) — KHÔNG được để lỗi
+        ở bước này làm hỏng cả quá trình search, và KHÔNG được block (dùng
+        put_nowait) vì đây chỉ là "cứu hộ" cho trường hợp timeout, không phải
+        luồng dữ liệu chính."""
+        if self._progress_queue is None:
+            return
+        try:
+            self._progress_queue.put_nowait(("progress", kwargs, None))
+        except Exception:
+            pass
+
     # entry point
     def run(self) -> SolverResult:
+        if self._cxdepth:
+            if self.mode == "ub":
+                return self._run_ub_cxdepth()
+            return self._run_lb_cxdepth()
         if self.mode == "ub":
             return self._run_ub()
         return self._run_lb()
@@ -143,6 +200,7 @@ class QuilLSEngine:
             )
 
         result = SolverResult(sat=False, optimal_depth=-1)
+        result.lower_bound = lower_bound
 
         with SolverFactory.create(self._solver_tag) as solver:
             self._prev_stats = {"conflicts": 0, "decisions": 0, "propagations": 0, "restarts": 0}
@@ -185,10 +243,14 @@ class QuilLSEngine:
                     if self.verbose:
                         log.info("  SAT at t=%d", t)
                     self._extract_solution_lb(result)
+                    self._fill_extra_metrics(result)
                     return result
                 else:
                     if self.verbose:
                         log.info("  UNSAT, at t=%d", t)
+                    self._report_progress(
+                        kind="lb_last_unsat", last_unsat_t=t, lower_bound=lower_bound,
+                    )
                 t+=1
 
         result.elapsed_sec = time.perf_counter() - t_start
@@ -206,6 +268,8 @@ class QuilLSEngine:
 
         self._dag = build_dependency_dag(self.circuit)
         lower_bound = self._critical_path_depth()
+        self._progress_lb_ctx = lower_bound
+        self._progress_best_ub = None
 
         if self.verbose:
             log.info(
@@ -282,8 +346,10 @@ class QuilLSEngine:
             model=best_model,
             iterations=iterations,
             elapsed_sec=time.perf_counter() - t_start,
+            lower_bound=lower_bound,
         )
         self._extract_solution_ub(result)
+        self._fill_extra_metrics(result)
         return result
 
     def _search_binary(
@@ -380,16 +446,27 @@ class QuilLSEngine:
 
         if not sat:
             return False, None
-        return True, solver.get_model()
+
+        model = solver.get_model()
+        if self._progress_best_ub is None or t < self._progress_best_ub:
+            self._progress_best_ub = t
+            self._report_progress(
+                kind="ub_best_sat", best_sat_t=t, lower_bound=self._progress_lb_ctx,
+            )
+        return True, model
 
     # Solution extract (mode="lb": có mapping_at_t đầy đủ theo từng t)
-    def _extract_solution_lb(self, result: SolverResult) -> None:
+    def _extract_solution_lb(self, result: SolverResult, t_max: Optional[int] = None) -> None:
         if not result.model or self._pool is None:
             return
 
         true_vars: set[int] = {lit for lit in result.model if lit > 0}
         pool = self._pool
-        t_star = result.optimal_depth
+        # Bình thường t_star = optimal_depth (chính là số timestep thật).
+        # Khi objective="cxdepth", optimal_depth mang giá trị CX-depth (k),
+        # KHÔNG phải số timestep thật — phải truyền t_max=horizon tường minh
+        # (xem _run_lb_cxdepth) để trích đúng mapping_at_t/schedule.
+        t_star = t_max if t_max is not None else result.optimal_depth
 
         # mapping_at_t[t][q] = p  cho mọi t từ 1 đến t_star
         for t in range(1, t_star + 1):
@@ -521,3 +598,260 @@ class QuilLSEngine:
             return depth
 
         return max(longest(gate.gate_id) for gate in gates)
+
+    def _fill_extra_metrics(self, result: SolverResult) -> None:
+        """Tính post-hoc CẢ 3 metric (depth, cx_depth, cx_count) từ
+        schedule/model đã trích được — BẤT KỂ result.objective là gì. Mục
+        đích: chạy --tool lb bình thường vẫn thấy cx_depth/cx_count, chạy
+        --cxdepth vẫn thấy depth thường/cx_count (xem yêu cầu in kết quả)."""
+        if not result.sat or self._pool is None:
+            return
+
+        gate_by_id = {g.gate_id: g for g in self.circuit.gates}
+
+        used_ts = sorted(result.schedule.keys())
+        result.depth = used_ts[-1] if used_ts else 0
+
+        # cx_active_ts: MỌI timestep thực sự có hoạt động CX — gồm cả (a) CX
+        # gate gốc của mạch, VÀ (b) 3 timestep của mỗi SWAP (1 SWAP vật lý =
+        # 3 CNOT liên tiếp, chiếm đúng cửa sổ {t-2,t-1,t} — xem
+        # encoding/swap.py::_constraint_14). Bỏ sót (b) là lý do cx_depth bị
+        # tính thiếu và solver có thể "lách" bằng cách chèn SWAP thừa.
+        cx_active_ts: set[int] = {
+            t for t in used_ts
+            if any(gate_by_id[g].gate_type == GateType.CX for g in result.schedule[t])
+        }
+
+        n_cx_original = sum(1 for g in self.circuit.gates if g.gate_type == GateType.CX)
+        true_vars = {lit for lit in result.model if lit > 0}
+        swap_events: set = set()
+        for lit in true_vars:
+            key = self._pool.name(lit)
+            if key is not None and key[0] == "sw":
+                _, _p, _p2, t_end = key
+                if t_end > result.depth:
+                    # QUAN TRỌNG: encoding/assumptions.py hiện chỉ ép
+                    # -d(gate,t) khi asm(t)=True — KHÔNG hề ràng buộc gì lên
+                    # biến sw(...) sau deadline. Với --tool ub, CNF có thể đã
+                    # được build tới 1 horizon LỚN HƠN t* (t* = depth cuối
+                    # cùng được chấp nhận) trong lúc probe/binary-search trước
+                    # khi thu hẹp về t* — các biến sw() tại t > t* hoàn toàn
+                    # KHÔNG bị ép False, nên solver có thể gán bừa True cho
+                    # chúng (đã quan sát thực tế: cx_depth=135 > depth=65,
+                    # điều này về logic là bất khả thi nếu không bỏ qua các
+                    # sw() "ma" này). Loại các sw() ngoài horizon thật.
+                    continue
+                swap_events.add(key)  # ("sw", p, p2, t) — mỗi swap event tính 1 lần
+                for t2 in (t_end, t_end - 1, t_end - 2):
+                    if t2 >= 1:
+                        cx_active_ts.add(t2)
+
+        result.cx_depth = len(cx_active_ts)
+        result.cx_count = n_cx_original + 3 * len(swap_events)
+
+        # Sanity check: nếu objective="cxdepth" thì optimal_depth (giá trị k mà
+        # solver tìm được) PHẢI khớp với cx_depth tính post-hoc từ schedule —
+        # lệch nhau nghĩa là định nghĩa cxl(t)/cardinality có bug, LUÔN cảnh
+        # báo (không gate theo verbose) vì đây là tín hiệu đúng-sai của encoding.
+        if result.objective == "cxdepth" and result.cx_depth != result.optimal_depth:
+            log.warning(
+                "⚠ cx_depth tính post-hoc từ schedule (%d) KHÁC optimal_depth solver "
+                "tìm được (%d) — nghi ngờ bug trong cxl(t)/cardinality encoding, "
+                "cần kiểm tra lại trước khi dùng kết quả này cho benchmark thật.",
+                result.cx_depth, result.optimal_depth,
+            )
+        if result.objective == "depth" and result.depth != result.optimal_depth:
+            log.warning(
+                "⚠ depth tính post-hoc từ schedule (%d) KHÁC optimal_depth solver "
+                "tìm được (%d) — có thể do gate cuối cùng không xuất hiện trong "
+                "schedule (kiểm tra _extract_solution_lb/ub).",
+                result.depth, result.optimal_depth,
+            )
+
+    # ------------------------------------------------------------------
+    # mode="lb", cxdepth=True — tối ưu CX-depth.
+    #
+    # Cách làm ĐÚNG theo code gốc QuilLS (github.com/anbclausen/quills,
+    # src/synthesizers/sat/phys.py: remove_all_non_cx_gates + reinsert_
+    # unary_gates): KHÔNG thêm biến/cardinality riêng cho CX-depth (cách
+    # làm trước — có bug off-by-one + thiếu tính SWAP + rất chậm do horizon
+    # lớn, xem lịch sử sửa ở trên). Thay vào đó: STRIP hết non-CX (unary)
+    # gate khỏi mạch TRƯỚC khi search, rồi chạy Y HỆT _run_lb() (không sửa
+    # gì) trên mạch chỉ còn CX gate. "depth" của search đó CHÍNH LÀ CX-depth
+    # của mạch gốc — SWAP vẫn được model đúng như bình thường (SWAP=3 CNOT
+    # được tính đúng vào depth của chính search này), không cần bookkeeping
+    # gì thêm, và không có chỗ cho bug vì tái dùng 100% code đã chạy đúng.
+    #
+    # HẠN CHẾ: "depth" đầy đủ (có unary gate chèn lại) hiện CHƯA reconstruct
+    # được — cần thuật toán tương đương reinsert_unary_gates của quills gốc
+    # (chèn từng unary gate vào đúng vị trí dựa theo mapping_at_t + thứ tự
+    # gốc trên từng qubit). Để result.depth = -1 (rõ ràng CHƯA có), thay vì
+    # đoán 1 con số có thể sai.
+    # ------------------------------------------------------------------
+    def _run_lb_cxdepth(self) -> SolverResult:
+        t_start = time.perf_counter()
+
+        cx_only_gates: list = []
+        sub_to_original: dict[int, int] = {}
+        for new_id, g in enumerate(
+            gate for gate in self.circuit.gates if gate.gate_type == GateType.CX
+        ):
+            cx_only_gates.append(
+                Gate(gate_id=new_id, name=g.name, gate_type=g.gate_type, qubits=g.qubits)
+            )
+            sub_to_original[new_id] = g.gate_id
+
+        if not cx_only_gates:
+            # Mạch không có CX gate nào -> CX-depth = 0, khỏi cần solve.
+            result = SolverResult(sat=True, optimal_depth=0, objective="cxdepth")
+            result.cx_depth = 0
+            result.cx_count = 0
+            result.depth = -1
+            result.elapsed_sec = time.perf_counter() - t_start
+            return result
+
+        cx_only_circuit = Circuit(n_qubits=self.circuit.n_qubits, gates=cx_only_gates)
+
+        if self.verbose:
+            log.info(
+                "Starting QuilLS (LB, objective=CX-depth) | strip non-CX gates: "
+                "%d -> %d gates còn lại",
+                len(self.circuit.gates), len(cx_only_gates),
+            )
+
+        sub_engine = QuilLSEngine(
+            circuit=cx_only_circuit, topology=self.topology,
+            solver_tag=self._solver_tag, verbose=self.verbose, mode="lb", cxdepth=False,
+            progress_queue=self._progress_queue,
+        )
+        sub_result = sub_engine.run()
+
+        result = SolverResult(
+            sat=sub_result.sat, optimal_depth=sub_result.optimal_depth, objective="cxdepth"
+        )
+        if not sub_result.sat:
+            result.elapsed_sec = time.perf_counter() - t_start
+            return result
+
+        result.model           = sub_result.model
+        result.initial_mapping = sub_result.initial_mapping
+        result.mapping_at_t    = sub_result.mapping_at_t
+        result.iterations      = sub_result.iterations
+        result.schedule = {
+            t: [sub_to_original[g] for g in gate_ids]
+            for t, gate_ids in sub_result.schedule.items()
+        }
+
+        # cx_depth/cx_count đã được _fill_extra_metrics tính SẴN cho
+        # sub_result (bên trong _run_lb của sub_engine, chạy trên mạch CHỈ
+        # CÒN CX gate) — số CX gate gốc và số SWAP không đổi khi bỏ unary
+        # gate, nên 2 giá trị này ĐÚNG LUÔN là cx_depth/cx_count của mạch GỐC,
+        # không cần tính lại.
+        result.cx_depth = sub_result.cx_depth
+        result.cx_count = sub_result.cx_count
+        result.lower_bound = sub_result.lower_bound
+        result.depth    = -1  # CHƯA reconstruct (xem docstring) — không đoán bừa
+
+        # Self-check: mạch CX-only KHÔNG có unary gate nào để "trốn" đếm, nên
+        # cx_depth (đếm timestep có CX) PHẢI bằng đúng optimal_depth (tổng số
+        # timestep) của chính search này — lệch nhau là dấu hiệu bug.
+        if sub_result.cx_depth != sub_result.optimal_depth:
+            log.warning(
+                "⚠ Trên mạch CX-only, cx_depth post-hoc (%d) khác optimal_depth "
+                "solver tìm được (%d) — với mạch KHÔNG có unary gate thì 2 giá "
+                "trị này PHẢI bằng nhau (không có timestep nào chỉ toàn unary "
+                "gate để 'trốn' đếm) — nghi ngờ bug, cần kiểm tra lại trước khi "
+                "dùng cho benchmark thật.",
+                sub_result.cx_depth, sub_result.optimal_depth,
+            )
+
+        result.elapsed_sec = time.perf_counter() - t_start
+        return result
+
+    # ------------------------------------------------------------------
+    # mode="ub", cxdepth=True — y hệt _run_lb_cxdepth ở trên, chỉ khác chạy
+    # sub_engine với mode="ub" thay vì "lb" (tái dùng _run_ub KHÔNG SỬA GÌ
+    # trên mạch CX-only).
+    # ------------------------------------------------------------------
+    def _run_ub_cxdepth(self) -> SolverResult:
+        t_start = time.perf_counter()
+
+        cx_only_gates: list = []
+        sub_to_original: dict[int, int] = {}
+        for new_id, g in enumerate(
+            gate for gate in self.circuit.gates if gate.gate_type == GateType.CX
+        ):
+            cx_only_gates.append(
+                Gate(gate_id=new_id, name=g.name, gate_type=g.gate_type, qubits=g.qubits)
+            )
+            sub_to_original[new_id] = g.gate_id
+
+        if not cx_only_gates:
+            result = SolverResult(sat=True, optimal_depth=0, objective="cxdepth")
+            result.cx_depth = 0
+            result.cx_count = 0
+            result.depth = -1
+            result.elapsed_sec = time.perf_counter() - t_start
+            return result
+
+        cx_only_circuit = Circuit(n_qubits=self.circuit.n_qubits, gates=cx_only_gates)
+
+        # QUAN TRỌNG: self._ub_hint (từ --ub, ước lượng cho circuit depth TOÀN
+        # PHẦN) không được hiệu chỉnh cho CX-depth -> BỎ QUA, để sub_engine tự
+        # dùng heuristic mặc định của chính nó (len(cx_only_gates) * 2), scale
+        # đúng theo mạch đã strip non-CX (xem thảo luận trước đó).
+        if self._ub_hint is not None:
+            log.info(
+                "cxdepth=True: bỏ qua --ub (%d, ước lượng cho circuit depth toàn "
+                "phần) — dùng heuristic mặc định của engine trên mạch đã strip "
+                "non-CX (~%d gate CX) thay thế.",
+                self._ub_hint, len(cx_only_gates),
+            )
+
+        if self.verbose:
+            log.info(
+                "Starting QuilLS (UB, objective=CX-depth) | strip non-CX gates: "
+                "%d -> %d gates còn lại",
+                len(self.circuit.gates), len(cx_only_gates),
+            )
+
+        sub_engine = QuilLSEngine(
+            circuit=cx_only_circuit, topology=self.topology,
+            solver_tag=self._solver_tag, verbose=self.verbose, mode="ub", cxdepth=False,
+            ub=None, ub_search=self._ub_search,
+            progress_queue=self._progress_queue,
+        )
+        sub_result = sub_engine.run()
+
+        result = SolverResult(
+            sat=sub_result.sat, optimal_depth=sub_result.optimal_depth, objective="cxdepth"
+        )
+        if not sub_result.sat:
+            result.elapsed_sec = time.perf_counter() - t_start
+            return result
+
+        result.model           = sub_result.model
+        result.initial_mapping = sub_result.initial_mapping
+        result.mapping_at_t    = sub_result.mapping_at_t
+        result.iterations      = sub_result.iterations
+        result.schedule = {
+            t: [sub_to_original[g] for g in gate_ids]
+            for t, gate_ids in sub_result.schedule.items()
+        }
+
+        result.cx_depth = sub_result.cx_depth
+        result.cx_count = sub_result.cx_count
+        result.lower_bound = sub_result.lower_bound
+        result.depth    = -1  # CHƯA reconstruct (xem docstring _run_lb_cxdepth)
+
+        if sub_result.cx_depth != sub_result.optimal_depth:
+            log.warning(
+                "⚠ Trên mạch CX-only (UB), cx_depth post-hoc (%d) khác optimal_depth "
+                "solver tìm được (%d) — với mạch KHÔNG có unary gate thì 2 giá trị "
+                "này PHẢI bằng nhau — nghi ngờ bug, cần kiểm tra lại trước khi dùng "
+                "cho benchmark thật.",
+                sub_result.cx_depth, sub_result.optimal_depth,
+            )
+
+        result.elapsed_sec = time.perf_counter() - t_start
+        return result

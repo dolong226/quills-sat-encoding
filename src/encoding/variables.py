@@ -86,6 +86,20 @@ class VarPool:
     def asm(self, t: int) -> int:
         # t là bước thời gian cuối cùng
         return self._var(("asm", t))
+
+    # Instrumentation — đếm biến theo từng loại (mp/oc/e/c/a/d/u/sw/st/asm)
+    def stats(self) -> dict[str, int]:
+        """Trả về {kind: số biến đã tạo thuộc kind đó}. Dùng cho instrumentation
+        (xem cột var_counts trong solve-log), không ảnh hưởng logic encode."""
+        counts: dict[str, int] = {}
+        for key in self._reverse.values():
+            kind = key[0]
+            counts[kind] = counts.get(kind, 0) + 1
+        return counts
+
+    def n_vars(self) -> int:
+        """Tổng số biến đã tạo (bất kể loại)."""
+        return len(self._reverse)
     
 def _format_key(key: VarKey) -> str:
     # Chuyển VarKey thành chuỗi

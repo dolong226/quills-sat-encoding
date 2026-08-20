@@ -1,0 +1,4 @@
+benchmark,n_qubits,n_gates,topology,solver,tool,timeout_sec,status,optimal_depth,elapsed_sec,iterations,valid,repeats,elapsed_mean,elapsed_std,elapsed_min,elapsed_max,n_ok,n_timeout,n_error,depth_consistent,cxdepth,objective,depth,cx_depth,cx_count,lower_bound
+16QBT_35CYC_TFL_0.qasm,16,109,ibmq_guadalupe,cadical195,lb,7200.0,SAT,42,242.56594290000066,42,,1,242.56594290000066,0.0,242.56594290000066,242.56594290000066,1,0,0,,False,depth,42,42,177,25
+16QBT_40CYC_TFL_0.qasm,16,143,ibmq_guadalupe,cadical195,lb,7200.0,TIMEOUT,-1,7200.0113518,0,,1,7200.0113518,0.0,7200.0113518,7200.0113518,0,1,0,,False,depth,-1,-1,-1,-1
+16QBT_45CYC_TFL_0.qasm,16,129,ibmq_guadalupe,cadical195,lb,7200.0,TIMEOUT,-1,7200.003448300002,0,,1,7200.003448300002,0.0,7200.003448300002,7200.003448300002,0,1,0,,False,depth,-1,-1,-1,-1

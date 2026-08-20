@@ -2,7 +2,7 @@
 QuilLS — Depth-Optimal Quantum Layout Synthesis via SAT
 
 ===============================================================================
-USAGE
+CÁCH DÙNG
 ===============================================================================
 # Chạy một file, dùng thuật toán mặc định (lb = tăng dần từ lower bound)
 python main.py circuit.qasm --topology ibmq_guadalupe
@@ -117,9 +117,11 @@ def main(argv: list[str] | None = None) -> int:
             validate=args.validate,        # có chạy validator sau khi SAT hay không
             output_csv=args.output,        # đường dẫn CSV tổng hợp kết quả batch (None = không lưu)
             tool=args.tool,                # "lb" | "ub" — thuật toán tìm optimal depth
+            cxdepth=args.cxdepth,          # tối ưu CX-depth thay vì circuit depth thường
             ub=args.ub,                    # chỉ dùng khi tool="ub": upper bound khởi điểm
             ub_search=args.ub_search,      # chỉ dùng khi tool="ub": "binary" | "linear"
             solve_log_dir=args.solve_log,  # thư mục ghi CSV instrumentation (None = tắt, mặc định)
+            repeats=args.repeats,           # số lần lặp mỗi file để lấy mean/std (mặc định 1 = không lặp)
         )
         return 0
 
@@ -137,9 +139,11 @@ def main(argv: list[str] | None = None) -> int:
         validate=args.validate,
         verbose=args.verbose,          # bật log chi tiết từng bước (t=... solving ...) từ QuilLSEngine
         tool=args.tool,
+        cxdepth=args.cxdepth,
         ub=args.ub,
         ub_search=args.ub_search,
         solve_log_dir=args.solve_log,
+        repeats=args.repeats,
     )
 
 
