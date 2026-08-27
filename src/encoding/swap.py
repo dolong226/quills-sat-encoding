@@ -39,17 +39,7 @@ class SwapConstraints(ConstraintGroup):
                     continue
                 implies(self.cnf, st_p, -self.pool.u(p, t2))
 
-    # constraint 16: anc = False
-    # def _constraint_16(self, t: int) -> None:
-    #     for (p, p2) in self.topology.edge_set:
-    #         sw_lit = self.pool.sw(p, p2, t)
-    #         oc_p   = self.pool.oc(p,  t)
-    #         oc_p2  = self.pool.oc(p2, t)
-    #         # sw -> (oc_p ∨ oc_p2)
-    #         bs = [oc_p, oc_p2]
-    #         self.cnf.append([-sw_lit, oc_p, oc_p2])
-
-    # constraint 16: anc = True
+    # constraint 16: anc = True (giữ nguyên theo bản gốc của bạn)
     def _constraint_16(self, t: int) -> None:
         for (p, p2) in self.topology.edge_set:
             sw_lit = self.pool.sw(p, p2, t)
@@ -69,14 +59,31 @@ class SwapConstraints(ConstraintGroup):
             iff_or(self.cnf, self.pool, st_p, sw_lits)
 
     def _constraint_18(self, t: int) -> None:
+        """
+        Bản gốc sinh cả 2 chiều của biconditional:
+            ¬st_p ⇒ (mp_prev ⇒ mp_curr)   [forward]
+            ¬st_p ⇒ (mp_curr ⇒ mp_prev)   [backward]
+
+        Chiều "backward" là hệ quả logic của chiều "forward" kết hợp với
+        constraint (1) (ExactlyOne trên mp theo p, mỗi q — trong
+        MappingConstraints), constraint (17) và (19) (đã có sẵn trong file
+        này). Chứng minh phản chứng (tóm tắt, xem chat để có bản đầy đủ):
+        giả sử ¬st_p, mp_curr đúng, mp_prev sai. Theo (1), q phải ở một vị
+        trí p'' ≠ p tại t-1. Nếu p'' không bị chạm bởi swap, forward-18 áp
+        dụng tại p'' buộc q ở lại p'' tại t, mâu thuẫn với mp_curr (constraint
+        1). Nếu p'' bị chạm bởi swap, (17)+(19) buộc q chuyển tới một p''' —
+        nếu p'''=p thì (17) áp dụng tại p buộc st_p đúng (mâu thuẫn giả
+        thiết), nếu p'''≠p thì mp^t_{q,p'''} đúng, lại mâu thuẫn với mp_curr
+        qua constraint (1). Mọi nhánh đều mâu thuẫn ⇒ backward luôn tự động
+        đúng, có thể bỏ. Chỉ giảm hệ số hằng số 2 lần (không đổi bậc), nhưng
+        an toàn tuyệt đối để áp dụng ngay.
+        """
         for p in range(self.topology.n_qubits):
             st_p = self.pool.st(p, t)
             for q in range(self.circuit.n_qubits):
                 mp_prev = self.pool.mp(q, p, t - 1)
                 mp_curr = self.pool.mp(q, p, t)
-
-                self.cnf.append([st_p, -mp_prev,  mp_curr])
-                self.cnf.append([st_p,  mp_prev, -mp_curr])
+                self.cnf.append([st_p, -mp_prev, mp_curr])
 
     def _constraint_19(self, t: int) -> None:
         for (p, p2) in self.topology.edge_set:
