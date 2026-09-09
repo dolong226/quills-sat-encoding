@@ -22,6 +22,7 @@ from encoding.connectivity import ConnectivityConstraints
 from encoding.gate_constraints import GateConstraints
 from encoding.swap import SwapConstraints
 from encoding.assumptions import AssumptionConstraints
+from encoding.symmetry_breaking import SymmetryBreakingConstraints
 
 from solver.base import SolverBase
 from solver.factory import SolverFactory
@@ -111,10 +112,17 @@ class QuilLSEngine:
                                     # "tiến độ tạm thời" sau mỗi lần solve() —
                                     # để timeout giữa chừng vẫn cứu được kết quả tốt
                                     # nhất đã tìm ra (xem _report_progress bên dưới).
+        sbp: bool = False,  # bật Symmetry Breaking Predicates (Tầng 1 + Tầng 2,
+                                    # xem encoding/symmetry_breaking.py). Chỉ thêm
+                                    # clause TĨNH tại t=1 (init_static), không đổi
+                                    # gì khác trong encoding — an toàn để A/B test
+                                    # (bật/tắt) trên cùng benchmark. Mặc định TẮT để
+                                    # không đổi hành vi hiện tại nếu không truyền.
     ) -> None:
         self.circuit   = circuit
         self.topology  = topology
         self.verbose   = verbose
+        self._sbp      = sbp
 
         if mode not in ("lb", "ub"):
             raise ValueError(f"mode phải là 'lb' hoặc 'ub', nhận được: {mode!r}")
@@ -189,6 +197,10 @@ class QuilLSEngine:
 
         self._encode_tracked("gates", gates.init_static)
         self._encode_tracked("swap", swap.init_static)
+
+        if self._sbp:
+            sbp = SymmetryBreakingConstraints(self._cnf, self._pool, self.circuit, self.topology)
+            self._encode_tracked("sbp", sbp.init_static)
 
         lower_bound = self._critical_path_depth()
         if self.verbose:
@@ -297,6 +309,10 @@ class QuilLSEngine:
 
         self._encode_tracked("gates", self._ub_gates.init_static)
         self._encode_tracked("swap",  self._ub_swap.init_static)
+
+        if self._sbp:
+            self._ub_sbp = SymmetryBreakingConstraints(self._cnf, self._pool, self.circuit, self.topology)
+            self._encode_tracked("sbp", self._ub_sbp.init_static)
 
         # Heuristic tạm cho upper bound nếu người dùng không tự truyền --ub:
         # len(gates) * 2. Chỉ là phỏng đoán, nên vẫn PHẢI probe/verify bằng
@@ -722,7 +738,7 @@ class QuilLSEngine:
         sub_engine = QuilLSEngine(
             circuit=cx_only_circuit, topology=self.topology,
             solver_tag=self._solver_tag, verbose=self.verbose, mode="lb", cxdepth=False,
-            progress_queue=self._progress_queue,
+            progress_queue=self._progress_queue, sbp=self._sbp,
         )
         sub_result = sub_engine.run()
 
@@ -819,7 +835,7 @@ class QuilLSEngine:
             circuit=cx_only_circuit, topology=self.topology,
             solver_tag=self._solver_tag, verbose=self.verbose, mode="ub", cxdepth=False,
             ub=None, ub_search=self._ub_search,
-            progress_queue=self._progress_queue,
+            progress_queue=self._progress_queue, sbp=self._sbp,
         )
         sub_result = sub_engine.run()
 

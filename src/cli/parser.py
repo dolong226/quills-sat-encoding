@@ -71,6 +71,15 @@ examples:
         help="Tối ưu CX-depth (chỉ đếm timestep có ít nhất 1 CX gate) thay vì "
              "circuit depth thường. Áp dụng cho cả --tool lb và ub. Mặc định TẮT.",
     )
+    p.add_argument(
+        "--sbp",
+        action="store_true",
+        help="Bật Symmetry Breaking Predicates (Tầng 1: neo q_max vào miền cơ "
+             "bản P_core; Tầng 2: neo q_next theo stabilizer — xem "
+             "encoding/symmetry_breaking.py). Chỉ thêm clause tĩnh tại t=1, "
+             "không đổi gì khác — dùng để A/B test tốc độ giải với/không có "
+             "SBP trên cùng benchmark. Mặc định TẮT.",
+    )
 
     # ── 3. Thuật toán tìm optimal depth: lb (mặc định) hoặc ub ─────────────────
     p.add_argument(

@@ -122,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
             ub_search=args.ub_search,      # chỉ dùng khi tool="ub": "binary" | "linear"
             solve_log_dir=args.solve_log,  # thư mục ghi CSV instrumentation (None = tắt, mặc định)
             repeats=args.repeats,           # số lần lặp mỗi file để lấy mean/std (mặc định 1 = không lặp)
+            sbp=args.sbp,                   # bật Symmetry Breaking Predicates (mặc định tắt)
         )
         return 0
 
@@ -144,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         ub_search=args.ub_search,
         solve_log_dir=args.solve_log,
         repeats=args.repeats,
+        sbp=args.sbp,
     )
 
 

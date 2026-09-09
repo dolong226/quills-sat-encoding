@@ -28,6 +28,7 @@ def run_file(
     ub_search:     str = "binary",
     solve_log_dir: Optional[Path] = None,
     repeats:       int = 1,
+    sbp:           bool = False,
 ) -> int:
     """Chạy một file duy nhất, in kết quả chi tiết. Trả về exit code.
 
@@ -59,11 +60,12 @@ def run_file(
         return 1
 
     log.info(
-        "Running QuilLS | solver=%s | tool=%s%s%s%s%s", solver_tag, tool,
+        "Running QuilLS | solver=%s | tool=%s%s%s%s%s%s", solver_tag, tool,
         f" | ub={ub}" if tool == "ub" and ub is not None else "",
         f" | ub_search={ub_search}" if tool == "ub" else "",
         " | cxdepth" if cxdepth else "",
         f" | repeats={repeats}" if repeats > 1 else "",
+        " | sbp" if sbp else "",
     )
 
     results     = []
@@ -82,6 +84,7 @@ def run_file(
             ub=ub,
             ub_search=ub_search,
             solve_logger=solve_logger,
+            sbp=sbp,
         )
         result = engine.run()
         results.append(result)

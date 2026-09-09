@@ -1,0 +1,565 @@
+diff --git a/src/cli/parser.py b/src/cli/parser.py
+index 7b00e81..a3447a0 100644
+--- a/src/cli/parser.py
++++ b/src/cli/parser.py
+@@ -71,6 +71,15 @@ examples:
+         help="Tối ưu CX-depth (chỉ đếm timestep có ít nhất 1 CX gate) thay vì "
+              "circuit depth thường. Áp dụng cho cả --tool lb và ub. Mặc định TẮT.",
+     )
++    p.add_argument(
++        "--sbp",
++        action="store_true",
++        help="Bật Symmetry Breaking Predicates (Tầng 1: neo q_max vào miền cơ "
++             "bản P_core; Tầng 2: neo q_next theo stabilizer — xem "
++             "encoding/symmetry_breaking.py). Chỉ thêm clause tĩnh tại t=1, "
++             "không đổi gì khác — dùng để A/B test tốc độ giải với/không có "
++             "SBP trên cùng benchmark. Mặc định TẮT.",
++    )
+ 
+     # ── 3. Thuật toán tìm optimal depth: lb (mặc định) hoặc ub ─────────────────
+     p.add_argument(
+diff --git a/src/encoding/symmetry.py b/src/encoding/symmetry.py
+new file mode 100644
+index 0000000..f468944
+--- /dev/null
++++ b/src/encoding/symmetry.py
+@@ -0,0 +1,134 @@
++# Tính tự đẳng cấu (automorphism), quỹ đạo (orbit) và miền cơ bản
++# (fundamental domain) của coupling graph — dùng cho Symmetry Breaking
++# Predicates (SBP) trong encoding/symmetry_breaking.py.
++#
++# Xem tài liệu methodology (Symmetry Breaking cho exact QLS) để có định
++# nghĩa/chứng minh đầy đủ. Tóm tắt các khái niệm dùng ở đây:
++#   - Aut(G_H): nhóm tự đẳng cấu của coupling graph.
++#   - Quỹ đạo (orbit) của 1 đỉnh p: tập mọi đỉnh mà p có thể "biến thành"
++#     qua một tự đẳng cấu.
++#   - Miền cơ bản P_core: 1 đại diện / orbit — dùng cho SBP Tầng 1.
++#   - Nhóm ổn định Gamma_p (stabilizer): các tự đẳng cấu giữ p đứng yên;
++#     quỹ đạo dưới Gamma_p (của các đỉnh còn lại) dùng cho SBP Tầng 2.
++#
++# CHIẾN LƯỢC TÍNH: dùng networkx.algorithms.isomorphism.GraphMatcher để
++# liệt kê TOÀN BỘ tự đẳng cấu của coupling graph (ánh xạ G vào chính nó).
++# Với các hardware topology dùng trong benchmark của QuilLS (<=127 qubit,
++# degree thấp 2-4, vd Guadalupe/Sycamore), |Aut(G)| thường chỉ vài chục
++# phần tử nên liệt kê toàn bộ là khả thi trong vài giây.
++#
++# VAN AN TOÀN _MAX_AUTOMORPHISMS: nếu topology nào đó có nhóm đối xứng lớn
++# bất thường, ta dừng liệt kê sớm. Dùng một tập con (không đầy đủ) các tự
++# đẳng cấu để tính orbit vẫn AN TOÀN cho Định lý 1 (không làm SAI —
++# orbit tính từ tập con luôn là orbit con của orbit thật, nên P_core tính
++# ra có thể lớn hơn cần thiết -> SBP cắt tỉa ÍT HƠN, nhưng KHÔNG BAO GIỜ
++# loại bỏ nghiệm tối ưu do lập luận Tầng 1/Tầng 2 chỉ cần "orbit dưới MỘT
++# nhóm con nào đó của Aut(G)", không bắt buộc là toàn bộ Aut(G)).
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from typing import Dict, FrozenSet, List, Optional, Sequence
++
++import networkx as nx
++
++from quills_platform.topology import Topology
++
++_MAX_AUTOMORPHISMS = 20_000  # van an toàn, xem ghi chú ở đầu file
++
++# Cache theo (n_qubits, edge_set) — tránh liệt kê lại automorphism mỗi khi
++# SymmetryModel.build() được gọi trên CÙNG 1 topology (vd: _run_lb_cxdepth
++# tạo sub_engine mới nhưng dùng lại đúng topology của engine cha; hoặc
++# --repeats N chạy lại nhiều lần).
++_MODEL_CACHE: Dict[tuple, "SymmetryModel"] = {}
++
++
++def _build_networkx_graph(topology: Topology) -> nx.Graph:
++    g = nx.Graph()
++    g.add_nodes_from(topology.nodes)
++    g.add_edges_from(topology.edge_set)
++    return g
++
++
++def _enumerate_automorphisms(g: nx.Graph) -> List[Dict[int, int]]:
++    """Liệt kê tự đẳng cấu của g (ánh xạ g vào chính nó, bảo toàn cạnh).
++    Luôn chứa ít nhất identity. Dừng sớm nếu vượt _MAX_AUTOMORPHISMS."""
++    matcher = nx.algorithms.isomorphism.GraphMatcher(g, g)
++    autos: List[Dict[int, int]] = []
++    for mapping in matcher.isomorphisms_iter():
++        autos.append(dict(mapping))
++        if len(autos) >= _MAX_AUTOMORPHISMS:
++            break
++    return autos
++
++
++def _orbits_from_automorphisms(
++    nodes: Sequence[int], automorphisms: Sequence[Dict[int, int]]
++) -> List[FrozenSet[int]]:
++    """Union-Find: hai node cùng orbit nếu tồn tại 1 automorphism (trong
++    danh sách đã cho) đưa node này thành node kia."""
++    parent = {n: n for n in nodes}
++
++    def find(x: int) -> int:
++        while parent[x] != x:
++            parent[x] = parent[parent[x]]
++            x = parent[x]
++        return x
++
++    def union(x: int, y: int) -> None:
++        rx, ry = find(x), find(y)
++        if rx != ry:
++            parent[rx] = ry
++
++    for gamma in automorphisms:
++        for u, v in gamma.items():
++            if u in parent and v in parent:
++                union(u, v)
++
++    groups: Dict[int, list] = {}
++    for n in nodes:
++        groups.setdefault(find(n), []).append(n)
++
++    return [frozenset(members) for members in groups.values()]
++
++
++@dataclass
++class SymmetryModel:
++    """Kết quả tính đối xứng của 1 coupling graph — chỉ phụ thuộc topology,
++    KHÔNG phụ thuộc circuit, nên tính 1 lần là dùng lại được cho mọi mạch
++    chạy trên cùng topology (xem SymmetryModel.build)."""
++
++    topology: Topology
++    automorphisms: List[Dict[int, int]] = field(default_factory=list)
++    orbits: List[FrozenSet[int]] = field(default_factory=list)
++
++    @classmethod
++    def build(cls, topology: Topology) -> "SymmetryModel":
++        key = (topology.n_qubits, frozenset(topology.edge_set))
++        cached = _MODEL_CACHE.get(key)
++        if cached is not None:
++            return cached
++
++        g = _build_networkx_graph(topology)
++        autos = _enumerate_automorphisms(g)
++        orbits = _orbits_from_automorphisms(topology.nodes, autos)
++
++        model = cls(topology=topology, automorphisms=autos, orbits=orbits)
++        _MODEL_CACHE[key] = model
++        return model
++
++    # ---- Tầng 1: miền cơ bản (fundamental domain) --------------------------
++    def fundamental_domain(self) -> List[int]:
++        """P_core — 1 đại diện / orbit. Quy ước: chọn phần tử NHỎ NHẤT mỗi
++        orbit để kết quả deterministic giữa các lần chạy (không phụ thuộc
++        thứ tự liệt kê automorphism của networkx)."""
++        return sorted(min(orbit) for orbit in self.orbits)
++
++    # ---- Tầng 2: quỹ đạo dưới nhóm ổn định (stabilizer) --------------------
++    def stabilizer_transversal(self, anchor: int) -> List[int]:
++        """P_stab(anchor) — 1 đại diện / orbit của các đỉnh KHÁC anchor,
++        dưới nhóm con Gamma_anchor = {gamma in Aut(G_H) | gamma(anchor) == anchor}."""
++        stab_autos = [g for g in self.automorphisms if g.get(anchor) == anchor]
++        remaining = [n for n in self.topology.nodes if n != anchor]
++        orbits = _orbits_from_automorphisms(remaining, stab_autos)
++        return sorted(min(orbit) for orbit in orbits)
+diff --git a/src/encoding/symmetry_breaking.py b/src/encoding/symmetry_breaking.py
+new file mode 100644
+index 0000000..00ab324
+--- /dev/null
++++ b/src/encoding/symmetry_breaking.py
+@@ -0,0 +1,152 @@
++# Symmetry Breaking Predicates (SBP) cho exact depth-optimal QLS.
++#
++# Ý tưởng & chứng minh: xem tài liệu methodology "CDCL-Compatible Symmetry
++# Breaking" — tóm tắt lại đây:
++#
++#   - P_core (miền cơ bản): 1 đại diện / orbit của coupling graph dưới
++#     Aut(G_H) (xem encoding/symmetry.py). TẦNG 1 ép q_max (qubit LOGIC
++#     bậc cao nhất — nhiều tương tác CX nhất) chỉ được đặt vào P_core tại
++#     t=1 (bước mapping đầu tiên).
++#         Eq(1):  ⋀_{p ∉ P_core} ¬mp^1_{q_max,p}
++#
++#   - P_stab(p') (transversal dưới nhóm ổn định của p'): sau khi q_max neo
++#     vào 1 đại diện cụ thể p' ∈ P_core, TẦNG 2 ép q_next (qubit logic kề
++#     q_max, bậc cao nhất — có fallback nếu q_max cô lập) chỉ được đặt vào
++#     P_stab(p').
++#         Eq(2):  ⋀_{p'∈P_core} ( mp^1_{q_max,p'} => ⋀_{p∉P_stab(p')} ¬mp^1_{q_next,p} )
++#
++#   - Theorem 1 (chứng minh trong tài liệu methodology): 2 ràng buộc trên
++#     KHÔNG loại bỏ nghiệm tối ưu toàn cục nào — nếu có nghiệm tối ưu L ở
++#     đâu đó, luôn "xoay" được L (bằng 1 tự đẳng cấu của G_H, áp lên MỌI
++#     biến mp/sw ở MỌI bước thời gian) thành 1 nghiệm L'' vẫn tối ưu và
++#     thoả cả Eq(1), Eq(2).
++#
++# LƯU Ý QUAN TRỌNG: các clause ở đây chỉ nói về mapping tại t=1 (initial
++# mapping) — không lặp lại theo từng bước thời gian như Mapping/Connectivity
++# Constraints. Vì vậy toàn bộ SBP được thêm ĐÚNG 1 LẦN trong init_static(),
++# giống cách GateConstraints (constraint 7) và SwapConstraints (constraint
++# 15) thêm clause tĩnh của riêng chúng — encode(t) ở đây là no-op.
++
++from __future__ import annotations
++
++import logging
++from typing import Optional, Set
++
++from circuit.gate import GateType
++from encoding.base import ConstraintGroup
++from encoding.symmetry import SymmetryModel
++
++log = logging.getLogger(__name__)
++
++# Bước thời gian của "initial mapping" trong encoding này (VarPool.mp dùng
++# t bắt đầu từ 1, xem solver/engine.py: t = 1 ở đầu vòng lặp _run_lb/_run_ub).
++_ANCHOR_T = 1
++
++
++class SymmetryBreakingConstraints(ConstraintGroup):
++    """Tầng 1 (orbit transversal anchoring) + Tầng 2 (stabilizer breaking).
++
++    Không ghi đè `encode(t)` với logic thật — mọi clause đều tĩnh (không
++    phụ thuộc t) nên nằm hết trong `init_static()`.
++    """
++
++    def __init__(self, cnf, pool, circuit, topology) -> None:
++        super().__init__(cnf, pool, circuit, topology)
++        self._sym: Optional[SymmetryModel] = None
++
++    def encode(self, t: int) -> None:  # SBP không lặp theo t — không dùng
++        pass
++
++    def init_static(self) -> None:
++        self._sym = SymmetryModel.build(self.topology)
++
++        q_max = self._highest_degree_qubit()
++        if q_max is None:
++            log.debug("SBP: mạch không có qubit logic nào — bỏ qua.")
++            return
++
++        p_core = self._sym.fundamental_domain()
++        self._add_level1(q_max, p_core)
++        log.debug(
++            "SBP Tầng 1: q_max=q%d bị neo vào P_core=%s (|P_core|=%d/%d)",
++            q_max, p_core, len(p_core), self.topology.n_qubits,
++        )
++
++        q_next = self._highest_degree_neighbor(q_max)
++        if q_next is None:
++            log.debug(
++                "SBP: q_max=q%d không có ứng viên q_next nào (mạch chỉ có "
++                "1 qubit logic) — chỉ áp Tầng 1.", q_max,
++            )
++            return
++
++        self._add_level2(q_max, q_next, p_core)
++        log.debug("SBP Tầng 2: q_next=q%d bị neo theo stabilizer của từng p' trong P_core", q_next)
++
++    # ---- chọn q_max / q_next (dựa trên bậc tương tác CX trong mạch) -------
++
++    def _interaction_degree(self) -> dict[int, int]:
++        """Bậc tương tác (số cổng CX) của mỗi qubit logic."""
++        degree: dict[int, int] = {q: 0 for q in range(self.circuit.n_qubits)}
++        for gate in self.circuit.gates:
++            if gate.gate_type == GateType.CX:
++                degree[gate.control_qubit] += 1
++                degree[gate.target_qubit] += 1
++        return degree
++
++    def _highest_degree_qubit(self) -> Optional[int]:
++        if self.circuit.n_qubits == 0:
++            return None
++        degree = self._interaction_degree()
++        # max() trên dict theo key -> cần key ổn định (thứ tự q=0,1,2,...)
++        # để deterministic khi có nhiều qubit đồng bậc cao nhất.
++        return max(sorted(degree), key=lambda q: degree[q])
++
++    def _highest_degree_neighbor(self, q_max: int) -> Optional[int]:
++        """q_next = qubit kề q_max (chung >=1 cổng CX) có bậc cao nhất.
++
++        Trường hợp biên (fallback, xem tài liệu methodology): nếu q_max
++        không có hàng xóm CX nào (cô lập, hoặc mạch chỉ có unary gate trên
++        q_max), chọn q_next là qubit có bậc cao THỨ HAI trên toàn mạch.
++        """
++        degree = self._interaction_degree()
++
++        neighbors: Set[int] = set()
++        for gate in self.circuit.gates:
++            if gate.gate_type == GateType.CX and q_max in gate.qubits:
++                neighbors.update(q for q in gate.qubits if q != q_max)
++
++        if neighbors:
++            return max(sorted(neighbors), key=lambda q: degree[q])
++
++        # Fallback: bậc cao thứ hai toàn mạch (khác q_max)
++        candidates = [q for q in degree if q != q_max]
++        if not candidates:
++            return None
++        return max(sorted(candidates), key=lambda q: degree[q])
++
++    # ---- Tầng 1: Eq(1) ------------------------------------------------------
++
++    def _add_level1(self, q_max: int, p_core: list[int]) -> None:
++        core_set = set(p_core)
++        for p in self._physicals:
++            if p not in core_set:
++                # ¬mp^1_{q_max, p}  — unit clause
++                self.cnf.append([-self.pool.mp(q_max, p, _ANCHOR_T)])
++
++    # ---- Tầng 2: Eq(2) ------------------------------------------------------
++
++    def _add_level2(self, q_max: int, q_next: int, p_core: list[int]) -> None:
++        for p_anchor in p_core:
++            stab = set(self._sym.stabilizer_transversal(p_anchor))
++            mp_anchor = self.pool.mp(q_max, p_anchor, _ANCHOR_T)
++            for p in self._physicals:
++                if p == p_anchor or p in stab:
++                    continue
++                # mp^1_{q_max,p_anchor} => ¬mp^1_{q_next,p}
++                #   <=>  (-mp_anchor) ∨ (-mp^1_{q_next,p})
++                self.cnf.append([-mp_anchor, -self.pool.mp(q_next, p, _ANCHOR_T)])
++
++    @property
++    def _physicals(self) -> range:
++        return range(self.topology.n_qubits)
+diff --git a/src/main.py b/src/main.py
+index 820c1d1..804062f 100644
+--- a/src/main.py
++++ b/src/main.py
+@@ -122,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
+             ub_search=args.ub_search,      # chỉ dùng khi tool="ub": "binary" | "linear"
+             solve_log_dir=args.solve_log,  # thư mục ghi CSV instrumentation (None = tắt, mặc định)
+             repeats=args.repeats,           # số lần lặp mỗi file để lấy mean/std (mặc định 1 = không lặp)
++            sbp=args.sbp,                   # bật Symmetry Breaking Predicates (mặc định tắt)
+         )
+         return 0
+ 
+@@ -144,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
+         ub_search=args.ub_search,
+         solve_log_dir=args.solve_log,
+         repeats=args.repeats,
++        sbp=args.sbp,
+     )
+ 
+ 
+diff --git a/src/runner/batch.py b/src/runner/batch.py
+index 29184f2..4943306 100644
+--- a/src/runner/batch.py
++++ b/src/runner/batch.py
+@@ -38,6 +38,7 @@ def _worker(
+     ub:            Optional[int] = None,
+     ub_search:     str = "binary",
+     solve_log_path: Optional[str] = None,
++    sbp:           bool = False,
+ ) -> None:
+     """
+     Chạy trong process con.
+@@ -63,6 +64,7 @@ def _worker(
+             ub_search=ub_search,
+             solve_logger=solve_logger,
+             progress_queue=queue,  # cùng queue với kết quả cuối, phân biệt qua tag
++            sbp=sbp,
+         )
+         result = engine.run()
+ 
+@@ -87,6 +89,7 @@ def _run_once(
+     solve_log_dir: Optional[Path] = None,
+     repeat_index:  Optional[int] = None,
+     quiet:         bool = False,
++    sbp:           bool = False,
+ ) -> BenchmarkEntry:
+     """Chạy 1 file ĐÚNG 1 LẦN trong process con, có timeout. Trả về BenchmarkEntry.
+ 
+@@ -105,20 +108,21 @@ def _run_once(
+             benchmark=qasm_path.name, n_qubits=0, n_gates=0,
+             topology=topology_name, solver=solver_tag, tool=tool, timeout_sec=timeout_sec,
+             status="ERROR", optimal_depth=-1, elapsed_sec=0.0, iterations=0,
+-            cxdepth=cxdepth,
++            cxdepth=cxdepth, sbp=sbp,
+         )
+ 
+     entry = BenchmarkEntry(
+         benchmark=qasm_path.name, n_qubits=n_qubits, n_gates=n_gates,
+         topology=topology_name, solver=solver_tag, tool=tool, timeout_sec=timeout_sec,
+         status="TIMEOUT", optimal_depth=-1, elapsed_sec=timeout_sec, iterations=0,
+-        cxdepth=cxdepth,
++        cxdepth=cxdepth, sbp=sbp,
+     )
+ 
+     solve_log_path = None
+     if solve_log_dir is not None:
+         suffix = f"_rep{repeat_index}" if repeat_index is not None else ""
+         tool_tag = f"{tool}-cx" if cxdepth else tool
++        tool_tag = f"{tool_tag}-sbp" if sbp else tool_tag
+         solve_log_path = str(Path(solve_log_dir) / f"{qasm_path.stem}_{tool_tag}{suffix}.csv")
+ 
+     queue: multiprocessing.Queue = multiprocessing.Queue()
+@@ -126,7 +130,7 @@ def _run_once(
+         target=_worker,
+         args=(
+             str(qasm_path), topology_name, solver_tag, queue,
+-            tool, cxdepth, ub, ub_search, solve_log_path,
++            tool, cxdepth, ub, ub_search, solve_log_path, sbp,
+         ),
+         daemon=True,
+     )
+@@ -262,6 +266,7 @@ def _run_single(
+     ub_search:     str = "binary",
+     solve_log_dir: Optional[Path] = None,
+     repeats:       int = 1,
++    sbp:           bool = False,
+ ) -> BenchmarkEntry:
+     """Chạy `_run_once()` đúng `repeats` lần, tổng hợp thời gian (mean/std/min/max).
+ 
+@@ -279,6 +284,7 @@ def _run_single(
+             ub_search=ub_search, solve_log_dir=solve_log_dir,
+             repeat_index=rep if repeats > 1 else None,
+             quiet=repeats > 1,
++            sbp=sbp,
+         )
+         raw_entries.append(entry)
+         if repeats > 1:
+@@ -330,6 +336,7 @@ def _run_single(
+         n_error=sum(1 for e in raw_entries if e.status == "ERROR"),
+         depth_consistent=depth_consistent,
+         cxdepth=cxdepth,
++        sbp=sbp,
+         objective=first.objective,
+         depth=first.depth,
+         cx_depth=first.cx_depth,
+@@ -359,14 +366,16 @@ def run_batch(
+     ub_search:     str = "binary",
+     solve_log_dir: Optional[Path] = None,
+     repeats:       int = 1,
++    sbp:           bool = False,
+ ) -> list[BenchmarkEntry]:
+     """Chạy tuần tự từng file, in summary, export CSV nếu có."""
+     log.info(
+-        "Batch | %d files | topology=%s | solver=%s | timeout=%.0fs | tool=%s%s%s%s | repeats=%d",
++        "Batch | %d files | topology=%s | solver=%s | timeout=%.0fs | tool=%s%s%s%s%s | repeats=%d",
+         len(qasm_files), topology_name, solver_tag, timeout_sec, tool,
+         f" | ub={ub}" if tool == "ub" and ub is not None else "",
+         f" | ub_search={ub_search}" if tool == "ub" else "",
+         " | cxdepth" if cxdepth else "",
++        " | sbp" if sbp else "",
+         repeats,
+     )
+     log.info("-" * 70)
+@@ -388,6 +397,7 @@ def run_batch(
+             ub_search=ub_search,
+             solve_log_dir=solve_log_dir,
+             repeats=repeats,
++            sbp=sbp,
+         )
+         entries.append(entry)
+ 
+diff --git a/src/runner/single.py b/src/runner/single.py
+index e03eb71..64ce4af 100644
+--- a/src/runner/single.py
++++ b/src/runner/single.py
+@@ -28,6 +28,7 @@ def run_file(
+     ub_search:     str = "binary",
+     solve_log_dir: Optional[Path] = None,
+     repeats:       int = 1,
++    sbp:           bool = False,
+ ) -> int:
+     """Chạy một file duy nhất, in kết quả chi tiết. Trả về exit code.
+ 
+@@ -59,11 +60,12 @@ def run_file(
+         return 1
+ 
+     log.info(
+-        "Running QuilLS | solver=%s | tool=%s%s%s%s%s", solver_tag, tool,
++        "Running QuilLS | solver=%s | tool=%s%s%s%s%s%s", solver_tag, tool,
+         f" | ub={ub}" if tool == "ub" and ub is not None else "",
+         f" | ub_search={ub_search}" if tool == "ub" else "",
+         " | cxdepth" if cxdepth else "",
+         f" | repeats={repeats}" if repeats > 1 else "",
++        " | sbp" if sbp else "",
+     )
+ 
+     results     = []
+@@ -82,6 +84,7 @@ def run_file(
+             ub=ub,
+             ub_search=ub_search,
+             solve_logger=solve_logger,
++            sbp=sbp,
+         )
+         result = engine.run()
+         results.append(result)
+diff --git a/src/runner/types.py b/src/runner/types.py
+index 87e8153..e24bd34 100644
+--- a/src/runner/types.py
++++ b/src/runner/types.py
+@@ -40,6 +40,7 @@ class BenchmarkEntry:
+     depth_consistent:    Optional[bool] = None  # False nếu các lần lặp SAT ra optimal_depth khác nhau
+                                                   # (dấu hiệu solver không deterministic — đáng nghi ngờ)
+     cxdepth:             bool = False  # True nếu tối ưu CX-depth thay vì circuit depth thường
++    sbp:                 bool = False  # True nếu bật Symmetry Breaking Predicates (Tầng 1 + Tầng 2)
+     objective:           str = "depth"  # "depth" | "cxdepth" — giá trị optimal_depth là gì
+     depth:               int = -1  # depth thường post-hoc (luôn điền, bất kể objective)
+     cx_depth:            int = -1  # CX-depth post-hoc (luôn điền, bất kể objective)
+diff --git a/src/solver/engine.py b/src/solver/engine.py
+index 1dbd3ed..9b85878 100644
+--- a/src/solver/engine.py
++++ b/src/solver/engine.py
+@@ -22,6 +22,7 @@ from encoding.connectivity import ConnectivityConstraints
+ from encoding.gate_constraints import GateConstraints
+ from encoding.swap import SwapConstraints
+ from encoding.assumptions import AssumptionConstraints
++from encoding.symmetry_breaking import SymmetryBreakingConstraints
+ 
+ from solver.base import SolverBase
+ from solver.factory import SolverFactory
+@@ -111,10 +112,17 @@ class QuilLSEngine:
+                                     # "tiến độ tạm thời" sau mỗi lần solve() —
+                                     # để timeout giữa chừng vẫn cứu được kết quả tốt
+                                     # nhất đã tìm ra (xem _report_progress bên dưới).
++        sbp: bool = False,  # bật Symmetry Breaking Predicates (Tầng 1 + Tầng 2,
++                                    # xem encoding/symmetry_breaking.py). Chỉ thêm
++                                    # clause TĨNH tại t=1 (init_static), không đổi
++                                    # gì khác trong encoding — an toàn để A/B test
++                                    # (bật/tắt) trên cùng benchmark. Mặc định TẮT để
++                                    # không đổi hành vi hiện tại nếu không truyền.
+     ) -> None:
+         self.circuit   = circuit
+         self.topology  = topology
+         self.verbose   = verbose
++        self._sbp      = sbp
+ 
+         if mode not in ("lb", "ub"):
+             raise ValueError(f"mode phải là 'lb' hoặc 'ub', nhận được: {mode!r}")
+@@ -190,6 +198,10 @@ class QuilLSEngine:
+         self._encode_tracked("gates", gates.init_static)
+         self._encode_tracked("swap", swap.init_static)
+ 
++        if self._sbp:
++            sbp = SymmetryBreakingConstraints(self._cnf, self._pool, self.circuit, self.topology)
++            self._encode_tracked("sbp", sbp.init_static)
++
+         lower_bound = self._critical_path_depth()
+         if self.verbose:
+             log.info(
+@@ -298,6 +310,10 @@ class QuilLSEngine:
+         self._encode_tracked("gates", self._ub_gates.init_static)
+         self._encode_tracked("swap",  self._ub_swap.init_static)
+ 
++        if self._sbp:
++            self._ub_sbp = SymmetryBreakingConstraints(self._cnf, self._pool, self.circuit, self.topology)
++            self._encode_tracked("sbp", self._ub_sbp.init_static)
++
+         # Heuristic tạm cho upper bound nếu người dùng không tự truyền --ub:
+         # len(gates) * 2. Chỉ là phỏng đoán, nên vẫn PHẢI probe/verify bằng
+         # SAT solve thật trước khi dùng làm điểm bắt đầu (xem bug cũ:
+@@ -722,7 +738,7 @@ class QuilLSEngine:
+         sub_engine = QuilLSEngine(
+             circuit=cx_only_circuit, topology=self.topology,
+             solver_tag=self._solver_tag, verbose=self.verbose, mode="lb", cxdepth=False,
+-            progress_queue=self._progress_queue,
++            progress_queue=self._progress_queue, sbp=self._sbp,
+         )
+         sub_result = sub_engine.run()
+ 
+@@ -819,7 +835,7 @@ class QuilLSEngine:
+             circuit=cx_only_circuit, topology=self.topology,
+             solver_tag=self._solver_tag, verbose=self.verbose, mode="ub", cxdepth=False,
+             ub=None, ub_search=self._ub_search,
+-            progress_queue=self._progress_queue,
++            progress_queue=self._progress_queue, sbp=self._sbp,
+         )
+         sub_result = sub_engine.run()
+ 
