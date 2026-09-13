@@ -38,7 +38,9 @@ def _worker(
     ub:            Optional[int] = None,
     ub_search:     str = "binary",
     solve_log_path: Optional[str] = None,
-    sbp:           bool = False,
+    idea1:         bool = False,
+    idea1_anchor_qubit: Optional[int] = None,
+    idea1_max_relational_clauses: int = 200_000,
 ) -> None:
     """
     Chạy trong process con.
@@ -64,7 +66,9 @@ def _worker(
             ub_search=ub_search,
             solve_logger=solve_logger,
             progress_queue=queue,  # cùng queue với kết quả cuối, phân biệt qua tag
-            sbp=sbp,
+            idea1=idea1,
+            idea1_anchor_qubit=idea1_anchor_qubit,
+            idea1_max_relational_clauses=idea1_max_relational_clauses,
         )
         result = engine.run()
 
@@ -89,7 +93,9 @@ def _run_once(
     solve_log_dir: Optional[Path] = None,
     repeat_index:  Optional[int] = None,
     quiet:         bool = False,
-    sbp:           bool = False,
+    idea1:         bool = False,
+    idea1_anchor_qubit: Optional[int] = None,
+    idea1_max_relational_clauses: int = 200_000,
 ) -> BenchmarkEntry:
     """Chạy 1 file ĐÚNG 1 LẦN trong process con, có timeout. Trả về BenchmarkEntry.
 
@@ -108,21 +114,22 @@ def _run_once(
             benchmark=qasm_path.name, n_qubits=0, n_gates=0,
             topology=topology_name, solver=solver_tag, tool=tool, timeout_sec=timeout_sec,
             status="ERROR", optimal_depth=-1, elapsed_sec=0.0, iterations=0,
-            cxdepth=cxdepth, sbp=sbp,
+            cxdepth=cxdepth, idea1=idea1,
         )
 
     entry = BenchmarkEntry(
         benchmark=qasm_path.name, n_qubits=n_qubits, n_gates=n_gates,
         topology=topology_name, solver=solver_tag, tool=tool, timeout_sec=timeout_sec,
         status="TIMEOUT", optimal_depth=-1, elapsed_sec=timeout_sec, iterations=0,
-        cxdepth=cxdepth, sbp=sbp,
+        cxdepth=cxdepth, idea1=idea1,
     )
 
     solve_log_path = None
     if solve_log_dir is not None:
         suffix = f"_rep{repeat_index}" if repeat_index is not None else ""
         tool_tag = f"{tool}-cx" if cxdepth else tool
-        tool_tag = f"{tool_tag}-sbp" if sbp else tool_tag
+        if idea1:
+            tool_tag += "-idea1"
         solve_log_path = str(Path(solve_log_dir) / f"{qasm_path.stem}_{tool_tag}{suffix}.csv")
 
     queue: multiprocessing.Queue = multiprocessing.Queue()
@@ -130,7 +137,8 @@ def _run_once(
         target=_worker,
         args=(
             str(qasm_path), topology_name, solver_tag, queue,
-            tool, cxdepth, ub, ub_search, solve_log_path, sbp,
+            tool, cxdepth, ub, ub_search, solve_log_path,
+            idea1, idea1_anchor_qubit, idea1_max_relational_clauses,
         ),
         daemon=True,
     )
@@ -266,7 +274,9 @@ def _run_single(
     ub_search:     str = "binary",
     solve_log_dir: Optional[Path] = None,
     repeats:       int = 1,
-    sbp:           bool = False,
+    idea1:         bool = False,
+    idea1_anchor_qubit: Optional[int] = None,
+    idea1_max_relational_clauses: int = 200_000,
 ) -> BenchmarkEntry:
     """Chạy `_run_once()` đúng `repeats` lần, tổng hợp thời gian (mean/std/min/max).
 
@@ -284,7 +294,8 @@ def _run_single(
             ub_search=ub_search, solve_log_dir=solve_log_dir,
             repeat_index=rep if repeats > 1 else None,
             quiet=repeats > 1,
-            sbp=sbp,
+            idea1=idea1, idea1_anchor_qubit=idea1_anchor_qubit,
+            idea1_max_relational_clauses=idea1_max_relational_clauses,
         )
         raw_entries.append(entry)
         if repeats > 1:
@@ -336,7 +347,7 @@ def _run_single(
         n_error=sum(1 for e in raw_entries if e.status == "ERROR"),
         depth_consistent=depth_consistent,
         cxdepth=cxdepth,
-        sbp=sbp,
+        idea1=idea1,
         objective=first.objective,
         depth=first.depth,
         cx_depth=first.cx_depth,
@@ -366,7 +377,9 @@ def run_batch(
     ub_search:     str = "binary",
     solve_log_dir: Optional[Path] = None,
     repeats:       int = 1,
-    sbp:           bool = False,
+    idea1:         bool = False,
+    idea1_anchor_qubit: Optional[int] = None,
+    idea1_max_relational_clauses: int = 200_000,
 ) -> list[BenchmarkEntry]:
     """Chạy tuần tự từng file, in summary, export CSV nếu có."""
     log.info(
@@ -375,7 +388,7 @@ def run_batch(
         f" | ub={ub}" if tool == "ub" and ub is not None else "",
         f" | ub_search={ub_search}" if tool == "ub" else "",
         " | cxdepth" if cxdepth else "",
-        " | sbp" if sbp else "",
+        " | idea1" if idea1 else "",
         repeats,
     )
     log.info("-" * 70)
@@ -397,7 +410,9 @@ def run_batch(
             ub_search=ub_search,
             solve_log_dir=solve_log_dir,
             repeats=repeats,
-            sbp=sbp,
+            idea1=idea1,
+            idea1_anchor_qubit=idea1_anchor_qubit,
+            idea1_max_relational_clauses=idea1_max_relational_clauses,
         )
         entries.append(entry)
 

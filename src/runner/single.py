@@ -28,7 +28,9 @@ def run_file(
     ub_search:     str = "binary",
     solve_log_dir: Optional[Path] = None,
     repeats:       int = 1,
-    sbp:           bool = False,
+    idea1:         bool = False,
+    idea1_anchor_qubit: Optional[int] = None,
+    idea1_max_relational_clauses: int = 200_000,
 ) -> int:
     """Chạy một file duy nhất, in kết quả chi tiết. Trả về exit code.
 
@@ -64,8 +66,8 @@ def run_file(
         f" | ub={ub}" if tool == "ub" and ub is not None else "",
         f" | ub_search={ub_search}" if tool == "ub" else "",
         " | cxdepth" if cxdepth else "",
+        " | idea1" if idea1 else "",
         f" | repeats={repeats}" if repeats > 1 else "",
-        " | sbp" if sbp else "",
     )
 
     results     = []
@@ -84,7 +86,9 @@ def run_file(
             ub=ub,
             ub_search=ub_search,
             solve_logger=solve_logger,
-            sbp=sbp,
+            idea1=idea1,
+            idea1_anchor_qubit=idea1_anchor_qubit,
+            idea1_max_relational_clauses=idea1_max_relational_clauses,
         )
         result = engine.run()
         results.append(result)
@@ -94,6 +98,8 @@ def run_file(
         if solve_logger is not None:
             suffix = f"_rep{rep}" if repeats > 1 else ""
             tool_tag = f"{tool}-cx" if cxdepth else tool
+            if idea1:
+                tool_tag += "-idea1"
             out_path = solve_log_dir / f"{qasm_path.stem}_{tool_tag}{suffix}.csv"
             solve_logger.write_csv(out_path)
             log.info("Solve-log saved → %s", out_path)

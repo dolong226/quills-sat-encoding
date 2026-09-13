@@ -22,7 +22,7 @@ from encoding.connectivity import ConnectivityConstraints
 from encoding.gate_constraints import GateConstraints
 from encoding.swap import SwapConstraints
 from encoding.assumptions import AssumptionConstraints
-from encoding.symmetry_breaking import SymmetryBreakingConstraints
+from encoding.idea1_domain_pruning import DomainPruningConstraints
 
 from solver.base import SolverBase
 from solver.factory import SolverFactory
@@ -106,29 +106,39 @@ class QuilLSEngine:
         ub: Optional[int] = None,  # chỉ dùng khi mode="ub": upper bound khởi điểm để probe.
                                     # Nếu None -> heuristic tạm: len(gates) * 2.
         ub_search: str = "binary", # chỉ dùng khi mode="ub": "binary" (nhị phân) | "linear" (giảm tuần tự từng t)
+        idea1: bool = False,       # Idea 1 (xem encoding/idea1_domain_pruning.py):
+                                    # distance cuts + arc consistency + symmetry
+                                    # anchor, mọi cut guarded bởi asm(H) hiện có
+                                    # của QuilLS. Mặc định TẮT — bật để so sánh
+                                    # với baseline (bằng nhau về optimal_depth,
+                                    # khác nhau về thời gian/số clause).
+        idea1_anchor_qubit: Optional[int] = None,  # ép anchor_qubit cụ thể cho
+                                    # symmetry anchor (mặc định None -> tự chọn
+                                    # logical qubit tham gia nhiều CX nhất).
+        idea1_max_relational_clauses: int = 200_000,  # ngân sách an toàn (xem
+                                    # DomainPruningConstraints) để tránh clause
+                                    # blow-up trên circuit/topology lớn — bỏ
+                                    # cut khi vượt ngân sách KHÔNG làm sai,
+                                    # chỉ làm pruning yếu đi.
         solve_logger: Optional[SolveLogger] = None,  # nếu truyền vào, ghi lại
                                     # thống kê (conflicts/decisions/...) cho mỗi lần solve()
         progress_queue = None,  # nếu truyền vào (vd multiprocessing.Queue), gửi
                                     # "tiến độ tạm thời" sau mỗi lần solve() —
                                     # để timeout giữa chừng vẫn cứu được kết quả tốt
                                     # nhất đã tìm ra (xem _report_progress bên dưới).
-        sbp: bool = False,  # bật Symmetry Breaking Predicates (Tầng 1 + Tầng 2,
-                                    # xem encoding/symmetry_breaking.py). Chỉ thêm
-                                    # clause TĨNH tại t=1 (init_static), không đổi
-                                    # gì khác trong encoding — an toàn để A/B test
-                                    # (bật/tắt) trên cùng benchmark. Mặc định TẮT để
-                                    # không đổi hành vi hiện tại nếu không truyền.
     ) -> None:
         self.circuit   = circuit
         self.topology  = topology
         self.verbose   = verbose
-        self._sbp      = sbp
 
         if mode not in ("lb", "ub"):
             raise ValueError(f"mode phải là 'lb' hoặc 'ub', nhận được: {mode!r}")
         self.mode = mode
         self._ub_hint = ub
         self._cxdepth = cxdepth
+        self.idea1 = idea1
+        self._idea1_anchor_qubit = idea1_anchor_qubit
+        self._idea1_max_relational_clauses = idea1_max_relational_clauses
 
         if ub_search not in ("binary", "linear"):
             raise ValueError(f"ub_search phải là 'binary' hoặc 'linear', nhận được: {ub_search!r}")
@@ -195,18 +205,25 @@ class QuilLSEngine:
         swap         = SwapConstraints(self._cnf, self._pool, self.circuit, self.topology)
         assumptions  = AssumptionConstraints(self._cnf, self._pool, self.circuit, self.topology)
 
+        domain_pruning: Optional[DomainPruningConstraints] = None
+        if self.idea1:
+            domain_pruning = DomainPruningConstraints(
+                self._cnf, self._pool, self.circuit, self.topology, self._dag,
+                anchor_qubit=self._idea1_anchor_qubit,
+                max_relational_clauses=self._idea1_max_relational_clauses,
+            )
+
         self._encode_tracked("gates", gates.init_static)
         self._encode_tracked("swap", swap.init_static)
-
-        if self._sbp:
-            sbp = SymmetryBreakingConstraints(self._cnf, self._pool, self.circuit, self.topology)
-            self._encode_tracked("sbp", sbp.init_static)
+        if domain_pruning is not None:
+            self._encode_tracked("idea1", domain_pruning.init_static)
 
         lower_bound = self._critical_path_depth()
         if self.verbose:
             log.info(
-                "Starting QuilLS (LB-first) | circuit=%s | topology=%dq | "
+                "Starting QuilLS (LB-first%s) | circuit=%s | topology=%dq | "
                 "solver=%s | lower_bound=%d",
+                ", idea1" if self.idea1 else "",
                 self.circuit, self.topology.n_qubits,
                 self._solver_tag, lower_bound,
             )
@@ -236,6 +253,10 @@ class QuilLSEngine:
                 self._flush_clauses(solver)
 
                 asm_lit = assumptions.assumption_lit(t)
+
+                if domain_pruning is not None:
+                    self._encode_tracked("idea1", lambda: domain_pruning.encode_for_horizon(t, asm_lit))
+                    self._flush_clauses(solver)
 
                 if self.verbose:
                     log.info("  t=%d  solving ...", t)
@@ -285,9 +306,10 @@ class QuilLSEngine:
 
         if self.verbose:
             log.info(
-                "Starting QuilLS (UB-first, incremental, search=%s) | circuit=%s | topology=%dq | "
+                "Starting QuilLS (UB-first, incremental, search=%s%s) | circuit=%s | topology=%dq | "
                 "solver=%s | lower_bound=%d",
-                self._ub_search, self.circuit, self.topology.n_qubits,
+                self._ub_search, ", idea1" if self.idea1 else "",
+                self.circuit, self.topology.n_qubits,
                 self._solver_tag, lower_bound,
             )
 
@@ -303,16 +325,22 @@ class QuilLSEngine:
         self._ub_swap         = SwapConstraints(self._cnf, self._pool, self.circuit, self.topology)
         self._ub_assumptions  = AssumptionConstraints(self._cnf, self._pool, self.circuit, self.topology)
 
+        self._ub_domain_pruning: Optional[DomainPruningConstraints] = None
+        if self.idea1:
+            self._ub_domain_pruning = DomainPruningConstraints(
+                self._cnf, self._pool, self.circuit, self.topology, self._dag,
+                anchor_qubit=self._idea1_anchor_qubit,
+                max_relational_clauses=self._idea1_max_relational_clauses,
+            )
+
         # Reset bộ đếm instrumentation TRƯỚC khi encode bất cứ thứ gì (kể cả
         # init_static), để clause tĩnh cũng được tính vào breakdown theo module.
         self._clause_counts, self._prev_clause_counts, self._prev_var_counts = {}, {}, {}
 
         self._encode_tracked("gates", self._ub_gates.init_static)
         self._encode_tracked("swap",  self._ub_swap.init_static)
-
-        if self._sbp:
-            self._ub_sbp = SymmetryBreakingConstraints(self._cnf, self._pool, self.circuit, self.topology)
-            self._encode_tracked("sbp", self._ub_sbp.init_static)
+        if self._ub_domain_pruning is not None:
+            self._encode_tracked("idea1", self._ub_domain_pruning.init_static)
 
         # Heuristic tạm cho upper bound nếu người dùng không tự truyền --ub:
         # len(gates) * 2. Chỉ là phỏng đoán, nên vẫn PHẢI probe/verify bằng
@@ -439,6 +467,10 @@ class QuilLSEngine:
             self._encode_tracked("assumptions", lambda: self._ub_assumptions.encode(t))
             self._flush_clauses(solver)
             self._asm_lits[t] = self._ub_assumptions.assumption_lit(t)
+            if self._ub_domain_pruning is not None:
+                asm_lit = self._asm_lits[t]
+                self._encode_tracked("idea1", lambda: self._ub_domain_pruning.encode_for_horizon(t, asm_lit))
+                self._flush_clauses(solver)
         return self._asm_lits[t]
 
     def _solve_at(self, t: int, solver: SolverBase, phase: str = "ub") -> tuple[bool, Optional[list[int]]]:
@@ -738,7 +770,9 @@ class QuilLSEngine:
         sub_engine = QuilLSEngine(
             circuit=cx_only_circuit, topology=self.topology,
             solver_tag=self._solver_tag, verbose=self.verbose, mode="lb", cxdepth=False,
-            progress_queue=self._progress_queue, sbp=self._sbp,
+            progress_queue=self._progress_queue,
+            idea1=self.idea1, idea1_anchor_qubit=self._idea1_anchor_qubit,
+            idea1_max_relational_clauses=self._idea1_max_relational_clauses,
         )
         sub_result = sub_engine.run()
 
@@ -835,7 +869,9 @@ class QuilLSEngine:
             circuit=cx_only_circuit, topology=self.topology,
             solver_tag=self._solver_tag, verbose=self.verbose, mode="ub", cxdepth=False,
             ub=None, ub_search=self._ub_search,
-            progress_queue=self._progress_queue, sbp=self._sbp,
+            progress_queue=self._progress_queue,
+            idea1=self.idea1, idea1_anchor_qubit=self._idea1_anchor_qubit,
+            idea1_max_relational_clauses=self._idea1_max_relational_clauses,
         )
         sub_result = sub_engine.run()
 

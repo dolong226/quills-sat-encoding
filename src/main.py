@@ -22,6 +22,10 @@ python main.py circuit.qasm --tool ub --ub 150
 # UB-first, quét giảm dần tuần tự thay vì nhị phân (để so sánh/debug)
 python main.py circuit.qasm --tool ub --ub-search linear
 
+# Bật Idea 1 (domain pruning: distance cuts + arc consistency + symmetry
+# anchor, xem encoding/idea1_domain_pruning.py) để so sánh với baseline
+python main.py circuit.qasm --idea1
+
 # Bật instrumentation: ghi lại thống kê (conflicts/decisions/...) cho từng
 # lần gọi solver.solve(), để tìm bottleneck. 1 file CSV / benchmark.
 python main.py benchmarks/ --tool ub --solve-log ./solve_logs
@@ -122,7 +126,9 @@ def main(argv: list[str] | None = None) -> int:
             ub_search=args.ub_search,      # chỉ dùng khi tool="ub": "binary" | "linear"
             solve_log_dir=args.solve_log,  # thư mục ghi CSV instrumentation (None = tắt, mặc định)
             repeats=args.repeats,           # số lần lặp mỗi file để lấy mean/std (mặc định 1 = không lặp)
-            sbp=args.sbp,                   # bật Symmetry Breaking Predicates (mặc định tắt)
+            idea1=args.idea1,                                    # Idea 1: domain pruning (xem cli/parser.py)
+            idea1_anchor_qubit=args.idea1_anchor_qubit,
+            idea1_max_relational_clauses=args.idea1_max_relational_clauses,
         )
         return 0
 
@@ -145,7 +151,9 @@ def main(argv: list[str] | None = None) -> int:
         ub_search=args.ub_search,
         solve_log_dir=args.solve_log,
         repeats=args.repeats,
-        sbp=args.sbp,
+        idea1=args.idea1,
+        idea1_anchor_qubit=args.idea1_anchor_qubit,
+        idea1_max_relational_clauses=args.idea1_max_relational_clauses,
     )
 
 

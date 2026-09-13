@@ -1,0 +1,10 @@
+benchmark,n_qubits,n_gates,topology,solver,tool,timeout_sec,status,optimal_depth,elapsed_sec,iterations,valid,repeats,elapsed_mean,elapsed_std,elapsed_min,elapsed_max,n_ok,n_timeout,n_error,depth_consistent,cxdepth,sbp,objective,depth,cx_depth,cx_count,lower_bound,partial_kind,partial_bound
+16QBT_05CYC_TFL_0.qasm,16,27,ibmq_guadalupe,cadical195,lb,7200.0,SAT,5,0.08028230000036274,5,,1,0.08028230000036274,0.0,0.08028230000036274,0.08028230000036274,1,0,0,,False,True,depth,5,5,17,5,,-1
+16QBT_10CYC_TFL_0.qasm,16,39,ibmq_guadalupe,cadical195,lb,7200.0,SAT,9,0.7723728999999366,9,,1,0.7723728999999366,0.0,0.7723728999999366,0.7723728999999366,1,0,0,,False,True,depth,9,9,34,7,,-1
+16QBT_15CYC_TFL_0.qasm,16,43,ibmq_guadalupe,cadical195,lb,7200.0,SAT,16,9.109174999999595,16,,1,9.109174999999595,0.0,9.109174999999595,9.109174999999595,1,0,0,,False,True,depth,16,16,63,10,,-1
+16QBT_20CYC_TFL_0.qasm,16,65,ibmq_guadalupe,cadical195,lb,7200.0,SAT,20,344.88908640000045,20,,1,344.88908640000045,0.0,344.88908640000045,344.88908640000045,1,0,0,,False,True,depth,20,20,79,14,,-1
+16QBT_25CYC_TFL_0.qasm,16,86,ibmq_guadalupe,cadical195,lb,7200.0,SAT,23,462.90716090000024,23,,1,462.90716090000024,0.0,462.90716090000024,462.90716090000024,1,0,0,,False,True,depth,23,23,85,14,,-1
+16QBT_30CYC_TFL_0.qasm,16,97,ibmq_guadalupe,cadical195,lb,7200.0,SAT,24,1122.9421794,24,,1,1122.9421794,0.0,1122.9421794,1122.9421794,1,0,0,,False,True,depth,24,24,92,19,,-1
+16QBT_35CYC_TFL_0.qasm,16,109,ibmq_guadalupe,cadical195,lb,7200.0,SAT,42,184.90163550000034,42,,1,184.90163550000034,0.0,184.90163550000034,184.90163550000034,1,0,0,,False,True,depth,42,42,180,25,,-1
+16QBT_40CYC_TFL_0.qasm,16,143,ibmq_guadalupe,cadical195,lb,7200.0,TIMEOUT_PARTIAL,-1,7200.015512599999,0,,1,7200.015512599999,0.0,7200.015512599999,7200.015512599999,0,1,0,,False,True,depth,-1,-1,-1,-1,lb_last_unsat,47
+16QBT_45CYC_TFL_0.qasm,16,129,ibmq_guadalupe,cadical195,lb,7200.0,TIMEOUT_PARTIAL,-1,7200.007989099999,0,,1,7200.007989099999,0.0,7200.007989099999,7200.007989099999,0,1,0,,False,True,depth,-1,-1,-1,-1,lb_last_unsat,31

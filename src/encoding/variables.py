@@ -15,46 +15,59 @@ class VarPool:
             self._reverse[lit] = key
 
         return lit
-
+    
     # Debug
-    def name(self, lit: int) -> VarKey | None:
+    def name(self, lit:int) -> VarKey | None:
         return self._reverse.get(abs(lit))
+    
+    # def explain(self, lit: int) -> str:
+    #     """
+    #     Trả về chuỗi mô tả dễ đọc cho một literal.
+
+    #     Ví dụ:
+    #         pool.explain(5)   → " mp(q=0, p=1, t=3)"
+    #         pool.explain(-5)  → "¬mp(q=0, p=1, t=3)"
+    #     """
+    #     key = self.name(lit)
+    #     if key is None:
+    #         return f"{'¬' if lit < 0 else ' '}UNKNOWN({abs(lit)})"
+    #     sign = "¬" if lit < 0 else " "
+    #     return f"{sign}{_format_key(key)}"
+
+    # def explain_clause(self, clause: list[int]) -> str:
+    #     """In một clause dạng dễ đọc, tiện để in CNF khi debug."""
+    #     return "(" + " ∨ ".join(self.explain(lit) for lit in clause) + ")"
+
+    # def dump(self) -> None:
+    #     """In toàn bộ bảng biến đã tạo ra. Dùng khi cần kiểm tra."""
+    #     print(f"{'ID':>5}  Biến")
+    #     print("-" * 40)
+    #     for lit, key in sorted(self._reverse.items()):
+    #         print(f"{lit:>5}  {_format_key(key)}")
 
     def mp(self, q: int, p: int, t: int) -> int:
         # mapping q <--> t
-        return self._var(("mp", q, p, t))
+        return self._var(("mp", q, p , t))
 
     def oc(self, p: int, t: int) -> int:
         # p đang bị chiếm giữ
         return self._var(("oc", p, t))
-
+    
     def e(self, q: int, q2: int, t: int) -> int:
         # q, q2 được ánh xạ đến 2 qubit vật lý có kết nối
         a, b = (q, q2) if q <= q2 else (q2, q)
         return self._var(("e", a, b, t))
 
     def c(self, g: int, t: int) -> int:
-        # cổng g đang được thực hiện (vẫn là biến thật, định nghĩa qua x — xem
-        # GateConstraints._define_c)
+        # cổng g đang được thực hiện
         return self._var(("c", g, t))
 
-    def x(self, g: int, t: int) -> int:
-        # ĐÃ HOÀN THÀNH: "cổng g đã được thực thi xong tính đến hết thời điểm t".
-        # Biến đơn điệu: x(g, t-1) ⇒ x(g, t). Thay thế vai trò của a/d:
-        #   a^t_g == x(g, t-1)      d^t_g == ¬x(g, t)
-        # Ràng buộc do GateConstraints/AssumptionConstraints sinh ra.
-        return self._var(("x", g, t))
-
     def a(self, g: int, t: int) -> int:
-        # !!! KHÔNG còn được GateConstraints/AssumptionConstraints ràng buộc.
-        # Giữ lại chỉ để không vỡ code khác lỡ còn gọi tới. Nếu bạn thấy hàm
-        # này được gọi ở đâu đó ngoài encoding/ (vd. bước trích xuất lời giải),
-        # hãy thay bằng x(g, t-1) trước khi dùng model từ solver.
+        # cổng g đã được thực hiện
         return self._var(("a", g, t))
 
     def d(self, g: int, t: int) -> int:
-        # !!! KHÔNG còn được GateConstraints/AssumptionConstraints ràng buộc.
-        # Xem cảnh báo ở a(). Thay bằng ¬x(g, t).
+        # cổng g đang đợi thực hiện (chưa thực hiện)
         return self._var(("d", g, t))
 
     def u(self, p: int, t: int) -> int:
@@ -74,7 +87,7 @@ class VarPool:
         # t là bước thời gian cuối cùng
         return self._var(("asm", t))
 
-    # Instrumentation — đếm biến theo từng loại (mp/oc/e/c/x/a/d/u/sw/st/asm)
+    # Instrumentation — đếm biến theo từng loại (mp/oc/e/c/a/d/u/sw/st/asm)
     def stats(self) -> dict[str, int]:
         """Trả về {kind: số biến đã tạo thuộc kind đó}. Dùng cho instrumentation
         (xem cột var_counts trong solve-log), không ảnh hưởng logic encode."""
@@ -87,8 +100,7 @@ class VarPool:
     def n_vars(self) -> int:
         """Tổng số biến đã tạo (bất kể loại)."""
         return len(self._reverse)
-
-
+    
 def _format_key(key: VarKey) -> str:
     # Chuyển VarKey thành chuỗi
     name = key[0]
@@ -100,7 +112,6 @@ def _format_key(key: VarKey) -> str:
         "oc":  ["p", "t"],
         "e":  ["q", "q'", "t"],
         "c":  ["g", "t"],
-        "x":  ["g", "t"],
         "a":  ["g", "t"],
         "d":  ["g", "t"],
         "u":  ["p", "t"],

@@ -72,13 +72,30 @@ examples:
              "circuit depth thường. Áp dụng cho cả --tool lb và ub. Mặc định TẮT.",
     )
     p.add_argument(
-        "--sbp",
+        "--idea1",
         action="store_true",
-        help="Bật Symmetry Breaking Predicates (Tầng 1: neo q_max vào miền cơ "
-             "bản P_core; Tầng 2: neo q_next theo stabilizer — xem "
-             "encoding/symmetry_breaking.py). Chỉ thêm clause tĩnh tại t=1, "
-             "không đổi gì khác — dùng để A/B test tốc độ giải với/không có "
-             "SBP trên cùng benchmark. Mặc định TẮT.",
+        help="Bật Idea 1 (encoding/idea1_domain_pruning.py): distance cuts + "
+             "arc consistency + symmetry anchor, theo quills_improvements_theory.tex. "
+             "Chỉ THÊM clause (được guard bởi asm(H) sẵn có của QuilLS), không đổi "
+             "kết quả optimal_depth — dùng để so sánh thời gian/số clause với "
+             "baseline. Mặc định TẮT.",
+    )
+    p.add_argument(
+        "--idea1-anchor-qubit",
+        type=int,
+        default=None,
+        metavar="Q",
+        help="Chỉ dùng khi --idea1: ép logical qubit Q làm symmetry anchor "
+             "(mặc định: tự chọn qubit tham gia nhiều CX nhất).",
+    )
+    p.add_argument(
+        "--idea1-max-relational-clauses",
+        type=int,
+        default=200_000,
+        metavar="N",
+        help="Chỉ dùng khi --idea1: ngân sách an toàn cho số relational cut "
+             "(forbidden-pair/support clause) được thêm — vượt ngân sách chỉ "
+             "làm pruning yếu đi, không ảnh hưởng tính đúng. Mặc định 200000.",
     )
 
     # ── 3. Thuật toán tìm optimal depth: lb (mặc định) hoặc ub ─────────────────

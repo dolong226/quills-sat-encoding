@@ -1,0 +1,11 @@
+benchmark,n_qubits,n_gates,topology,solver,tool,timeout_sec,status,optimal_depth,elapsed_sec,iterations,valid,repeats,elapsed_mean,elapsed_std,elapsed_min,elapsed_max,n_ok,n_timeout,n_error,depth_consistent,cxdepth,sbp,objective,depth,cx_depth,cx_count,lower_bound,partial_kind,partial_bound
+vqe_8_0_10_100.qasm,8,261,ibmq_guadalupe,cadical195,lb,7200.0,TIMEOUT_PARTIAL,-1,7200.009832400001,0,,1,7200.009832400001,0.0,7200.009832400001,7200.009832400001,0,1,0,,False,True,depth,-1,-1,-1,-1,lb_last_unsat,206
+vqe_8_0_5_100.qasm,8,193,ibmq_guadalupe,cadical195,lb,7200.0,TIMEOUT_PARTIAL,-1,7200.004374600001,0,,1,7200.004374600001,0.0,7200.004374600001,7200.004374600001,0,1,0,,False,True,depth,-1,-1,-1,-1,lb_last_unsat,180
+vqe_8_1_10_100.qasm,8,194,ibmq_guadalupe,cadical195,lb,7200.0,SAT,167,1944.2868831000014,167,,1,1944.2868831000014,0.0,1944.2868831000014,1944.2868831000014,1,0,0,,False,True,depth,167,150,254,158,,-1
+vqe_8_1_5_100.qasm,8,77,ibmq_guadalupe,cadical195,lb,7200.0,SAT,66,39.16688069999873,66,,1,39.16688069999873,0.0,39.16688069999873,39.16688069999873,1,0,0,,False,True,depth,66,60,90,63,,-1
+vqe_8_2_10_100.qasm,8,306,ibmq_guadalupe,cadical195,lb,7200.0,TIMEOUT_PARTIAL,-1,7200.001269500004,0,,1,7200.001269500004,0.0,7200.001269500004,7200.001269500004,0,1,0,,False,True,depth,-1,-1,-1,-1,lb_last_unsat,293
+vqe_8_2_5_100.qasm,8,183,ibmq_guadalupe,cadical195,lb,7200.0,SAT,180,4466.043157599997,180,,1,4466.043157599997,0.0,4466.043157599997,4466.043157599997,1,0,0,,False,True,depth,180,164,297,171,,-1
+vqe_8_3_10_100.qasm,8,308,ibmq_guadalupe,cadical195,lb,7200.0,TIMEOUT_PARTIAL,-1,7200.010925300005,0,,1,7200.010925300005,0.0,7200.010925300005,7200.010925300005,0,1,0,,False,True,depth,-1,-1,-1,-1,lb_last_unsat,263
+vqe_8_3_5_100.qasm,8,152,ibmq_guadalupe,cadical195,lb,7200.0,SAT,137,1639.4437525999965,137,,1,1639.4437525999965,0.0,1639.4437525999965,1639.4437525999965,1,0,0,,False,True,depth,137,135,256,128,,-1
+vqe_8_4_10_100.qasm,8,271,ibmq_guadalupe,cadical195,lb,7200.0,TIMEOUT_PARTIAL,-1,7200.013906399996,0,,1,7200.013906399996,0.0,7200.013906399996,7200.013906399996,0,1,0,,False,True,depth,-1,-1,-1,-1,lb_last_unsat,225
+vqe_8_4_5_100.qasm,8,154,ibmq_guadalupe,cadical195,lb,7200.0,SAT,133,799.2355067000026,133,,1,799.2355067000026,0.0,799.2355067000026,799.2355067000026,1,0,0,,False,True,depth,133,128,219,130,,-1

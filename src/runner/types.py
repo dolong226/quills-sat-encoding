@@ -40,7 +40,8 @@ class BenchmarkEntry:
     depth_consistent:    Optional[bool] = None  # False nếu các lần lặp SAT ra optimal_depth khác nhau
                                                   # (dấu hiệu solver không deterministic — đáng nghi ngờ)
     cxdepth:             bool = False  # True nếu tối ưu CX-depth thay vì circuit depth thường
-    sbp:                 bool = False  # True nếu bật Symmetry Breaking Predicates (Tầng 1 + Tầng 2)
+    idea1:               bool = False  # True nếu chạy với --idea1 (encoding/idea1_domain_pruning.py:
+                                         # distance cuts + arc consistency + symmetry anchor)
     objective:           str = "depth"  # "depth" | "cxdepth" — giá trị optimal_depth là gì
     depth:               int = -1  # depth thường post-hoc (luôn điền, bất kể objective)
     cx_depth:            int = -1  # CX-depth post-hoc (luôn điền, bất kể objective)
